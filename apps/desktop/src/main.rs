@@ -108,16 +108,13 @@ fn main() {
                     settings::apply_appearance(preferences.appearance, window, cx);
                 }
                 cx.new(|cx| {
-                    app::PairCamApp::new(
-                        engine,
-                        channels,
-                        options.connect,
-                        options.settings,
+                    let startup = app::Startup {
+                        connect_to: options.connect,
+                        show_settings: options.settings,
                         data_directory,
                         preferences,
-                        window,
-                        cx,
-                    )
+                    };
+                    app::PairCamApp::new(engine, channels, startup, window, cx)
                 })
             })
             .expect("failed to open the main window");

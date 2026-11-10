@@ -4,10 +4,11 @@
 //! encodes in real time:
 //!
 //! ```text
-//! cargo run -p paircam-engine --example simulator -- --codec hevc
+//! cargo run -p paircam-engine --example simulator
 //! ```
 //!
-//! Then connect the desktop app (or the `headless` example) to `127.0.0.1:47810`.
+//! The desktop app finds it on the network; the `headless` example connects to
+//! `127.0.0.1:47810`.
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read};

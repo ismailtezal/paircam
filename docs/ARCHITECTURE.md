@@ -59,8 +59,12 @@ The whole desktop app is Rust in one process: interface, engine and the feed to 
 - **Engine:** finds phones on the network, pairs, receives the stream, decodes with FFmpeg on the
   GPU (D3D11VA), and converts to NV12. Bundling FFmpeg means HEVC works without the paid
   Microsoft HEVC extension.
-- **Preview:** decoded frames are drawn in the GPUI window. How to present live video in GPUI on
-  Windows with the least copying is an open question that the Phase 0 spike must answer.
+- **Discovery:** the phone advertises itself with Bonjour and the engine finds it through the
+  DNS-SD client built into Windows. The desktop always opens the connection, so Windows never
+  shows a firewall prompt.
+- **Preview:** the engine scales each decoded picture to the preview size as BGRA (at most 30 a
+  second) and the window turns it into a GPUI render image. The virtual camera gets every
+  picture at full size, separately, so the preview never limits what other apps receive.
 - **Virtual camera (C++):** a Media Foundation source registered once, with administrator
   rights, by the installer. Windows loads it into its own camera service, so it must live in a
   folder that service can read (Program Files). The engine feeds it over a named pipe or shared

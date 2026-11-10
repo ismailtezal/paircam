@@ -34,6 +34,17 @@ use crate::controls::StreamControls;
 use crate::settings::{self, Appearance, Preferences, SettingsView};
 use crate::text;
 
+/// What the app is started with.
+pub struct Startup {
+    /// Connect to this address right away.
+    pub connect_to: Option<SocketAddr>,
+    /// Open the settings sheet right away.
+    pub show_settings: bool,
+    /// Where settings are kept.
+    pub data_directory: PathBuf,
+    pub preferences: Preferences,
+}
+
 /// One phone on the connect screen.
 struct PhoneRow {
     name: String,
@@ -75,13 +86,17 @@ impl PairCamApp {
     pub fn new(
         engine: Engine,
         channels: Channels,
-        connect_to: Option<SocketAddr>,
-        show_settings: bool,
-        data_directory: PathBuf,
-        preferences: Preferences,
+        startup: Startup,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let Startup {
+            connect_to,
+            show_settings,
+            data_directory,
+            preferences,
+        } = startup;
+
         // Follow Windows when it switches between light and dark, if the user asked for that.
         cx.observe_window_appearance(window, |this, window, cx| {
             if this.preferences.appearance == Appearance::System {
