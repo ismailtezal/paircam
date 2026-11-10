@@ -1,0 +1,18 @@
+[package]
+name = "paircam-desktop"
+description = "PairCam desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "paircam"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+gpui-kit.workspace = true
+
+[lints]
+workspace = true

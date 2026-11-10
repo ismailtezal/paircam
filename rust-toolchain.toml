@@ -1,0 +1,4 @@
+# The desktop app targets Windows 11 and links against the MSVC runtime and Windows SDK.
+[toolchain]
+channel = "stable-x86_64-pc-windows-msvc"
+components = ["rustfmt", "clippy"]

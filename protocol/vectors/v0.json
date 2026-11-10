@@ -1,0 +1,102 @@
+{
+  "handshakes": [
+    {
+      "cameraId": "101112131415161718191a1b1c1d1e1f",
+      "cameraPrivateKey": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "cameraToHostKey": "d6167766508a608443d81adfdebbadc75e3ff382684fa5f494bccab414f9761f",
+      "hostId": "000102030405060708090a0b0c0d0e0f",
+      "hostPrivateKey": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "hostToCameraKey": "8b94753b7a1a8fe21815a5231966aa2aab5c46a8c6d2e12c9d8f7bb38ff8e533",
+      "mode": "pair",
+      "pairingCode": "711484",
+      "pairingKeyIn": "0000000000000000000000000000000000000000000000000000000000000000",
+      "pairingKeyOut": "5f79dfee070e6a1e358eacd546c967d84428d08c7e9bcf59f6477b0642cbb04c",
+      "record1": "5043414d0000000102030405060708090a0b0c0d0e0fa0289810032eb417274eebc4a38e6899b935321d53554e32ec6322f0fa1e724e",
+      "record2": "5043414d0000101112131415161718191a1b1c1d1e1f675dd574ed7789310b3d2e7681f3790b466c773b1521fecf36577958371ea52f",
+      "record3": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254"
+    },
+    {
+      "cameraId": "101112131415161718191a1b1c1d1e1f",
+      "cameraPrivateKey": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+      "cameraToHostKey": "3922870beb96e146bc92d6ad59ac322eaeca2668ea4bdc4b29accb1c61705d9f",
+      "hostId": "000102030405060708090a0b0c0d0e0f",
+      "hostPrivateKey": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "hostToCameraKey": "faa99bc6e93ca722f5d8cc277ff5dcf56e6040abaa6f12c6519215e675494964",
+      "mode": "resume",
+      "pairingCode": "957932",
+      "pairingKeyIn": "5f79dfee070e6a1e358eacd546c967d84428d08c7e9bcf59f6477b0642cbb04c",
+      "pairingKeyOut": "80440769c93257f2b4c3f0808217057286a657bf229d32ae61d577895e938d4c",
+      "record1": "5043414d0001000102030405060708090a0b0c0d0e0f51600d1bad28ef936e05af768bbb0247569501717d98b463e8a88ce5cefeb3a7",
+      "record2": "5043414d0000101112131415161718191a1b1c1d1e1fdc2cca31e8e43bbd91dff7e475cca3347eb478107d5bd765aba4ae4a30c35d44",
+      "record3": "493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d"
+    }
+  ],
+  "messages": [
+    {
+      "bytes": "100107800438005a01000000050102030405",
+      "exact": true,
+      "name": "videoConfig"
+    },
+    {
+      "bytes": "11000102030405060701000000022601",
+      "exact": true,
+      "name": "videoFrame"
+    },
+    {
+      "bytes": "05",
+      "exact": true,
+      "name": "startStream"
+    },
+    {
+      "bytes": "06",
+      "exact": true,
+      "name": "stopStream"
+    },
+    {
+      "bytes": "12",
+      "exact": true,
+      "name": "requestKeyframe"
+    },
+    {
+      "bytes": "3e00000000000f4240",
+      "exact": true,
+      "name": "ping"
+    },
+    {
+      "bytes": "3f00000000000f4240",
+      "exact": true,
+      "name": "pong"
+    },
+    {
+      "bytes": "017b226e616d65223a2254657374206950686f6e65222c2261707056657273696f6e223a22302e312e30222c22706c6174666f726d223a22696f73222c226d6f64656c223a226950686f6e6531362c32227d",
+      "exact": false,
+      "name": "hello"
+    },
+    {
+      "bytes": "207b227a6f6f6d223a322e302c22746f726368223a747275657d",
+      "exact": false,
+      "name": "control"
+    }
+  ],
+  "sealed": {
+    "key": "8b94753b7a1a8fe21815a5231966aa2aab5c46a8c6d2e12c9d8f7bb38ff8e533",
+    "records": [
+      {
+        "counter": 0,
+        "plaintext": "",
+        "record": "2794c38bc45a314f1cd4ddab7e85dc00"
+      },
+      {
+        "counter": 1,
+        "plaintext": "05",
+        "record": "132ee9317066dc7f8f3b41d7acc9ec87af"
+      },
+      {
+        "counter": 2,
+        "plaintext": "5061697243616d207265636f7264206e756d626572207468726565",
+        "record": "80204c7209c5423087fa5e90c274292c67e9be0538c4e7af6dc40af19660941ed167356021d2abb1883bc2"
+      }
+    ]
+  },
+  "version": 0
+}

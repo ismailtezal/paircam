@@ -35,3 +35,9 @@ x64/
 Thumbs.db
 .idea/
 .claude/settings.local.json
+
+# Rust
+/target/
+
+# Third-party binaries fetched by scripts
+/third_party/

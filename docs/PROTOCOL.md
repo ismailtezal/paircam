@@ -1,67 +1,243 @@
 # PairCam protocol
 
-**Version 0: draft.** This will change until the first working end-to-end build; after that,
-every change bumps the version and updates the test vectors in `protocol/vectors`.
+**Version 0.** This may still change until the first release; every change after that bumps the
+version. The Rust implementation is `crates/protocol`; the Swift implementation lives in the
+phone's camera engine. Both are tested against the shared vectors in `protocol/vectors`.
 
 ## Goals
 
 - Lowest practical delay on a local network.
 - The same bytes over Wi-Fi and over a USB tunnel.
 - Both directions: video from the phone, control from the desktop.
+- Nothing readable or controllable by other devices on the network.
 - Old and new app versions can detect each other and say so clearly.
 
-## Discovery and pairing
+## Roles and transport
 
-- The desktop app advertises `_paircam._tcp` over mDNS. The phone lists what it finds.
-- First pairing: the desktop shows a QR code holding its address, port and a one-time secret.
-  The phone scans it, both sides derive a long-term key, and later connections are automatic.
-- Over Wi-Fi the phone connects to the desktop (the desktop listens). Over USB the direction is
-  reversed, because the tunnel only lets the PC open connections; the messages are identical.
-- The connection is encrypted and authenticated with the pairing key. Unpaired devices get
-  nothing.
+- The **camera** is the phone. It listens on a TCP port (default `47810`).
+- The **host** is the desktop app. It always opens the connection.
 
-## Transport
+The host connects outward for two reasons: Windows does not ask the user to approve outgoing
+connections, and a USB tunnel only lets the PC open connections. Wi-Fi and USB therefore carry
+identical bytes.
 
-One TCP connection with `TCP_NODELAY`, carrying framed messages. On a local network, TCP with
-frame dropping at the sender keeps delay low and is far simpler than a custom UDP transport.
-If measurements on poor Wi-Fi show head-of-line stalls, version 1 may move video to UDP.
+One TCP connection with `TCP_NODELAY` carries everything. On a local network, TCP with frame
+dropping at the sender keeps delay low and is far simpler than a custom UDP transport. If
+measurements on poor Wi-Fi show head-of-line stalls, a later version may move video to UDP.
 
-## Framing
+## Discovery
 
-All integers are big-endian.
+The camera advertises the Bonjour service `_paircam._tcp` while the app is open, with TXT records:
+
+| Key | Value |
+| --- | --- |
+| `v` | protocol version, decimal |
+| `id` | camera id, 32 hex characters |
+| `name` | device name shown to the user |
+
+The host browses for the service and lists the cameras it finds. A camera can also be reached by
+typing its address.
+
+## Records
+
+All integers are big-endian. Everything on the wire is a sequence of records:
+
+```
+u32  length      bytes that follow, at most 8 MiB
+...  body
+```
+
+The first three records are the plaintext handshake. Every record after that is encrypted.
+
+## Handshake
+
+Each side has a random 16-byte device id that never changes. Each connection uses fresh X25519
+key pairs.
+
+| # | Direction | Body |
+| --- | --- | --- |
+| 1 | host → camera | `"PCAM"`, `u8` version, `u8` mode (0 = pair, 1 = resume), 16-byte host id, 32-byte commitment = SHA-256(host public key) |
+| 2 | camera → host | `"PCAM"`, `u8` version, `u8` status, 16-byte camera id, 32-byte camera public key |
+| 3 | host → camera | 32-byte host public key |
+
+Status: 0 = ok, 1 = unsupported version, 2 = not paired with this host (in resume mode),
+3 = busy with another host. Any status other than 0 ends the connection.
+
+The camera checks that record 3 matches the commitment in record 1 and closes if it does not.
+Committing first stops an attacker in the middle from choosing a key that makes the pairing codes
+match.
+
+### Keys
+
+```
+dh         = X25519(own private key, peer public key)
+psk        = 32 zero bytes                      (pair mode)
+           = the stored pairing key             (resume mode)
+prk        = HKDF-Extract(salt = psk, ikm = dh)                 HKDF-SHA-256
+th         = SHA-256(record 1 body || record 2 body || record 3 body)
+key(label) = HKDF-Expand(prk, info = label || th, 32 bytes)
+
+host → camera key   label "paircam v0 h2c"
+camera → host key   label "paircam v0 c2h"
+pairing key         label "paircam v0 pairing"
+pairing code        label "paircam v0 sas", first 4 bytes as u32, modulo 1 000 000,
+                    shown as 6 digits with leading zeros
+```
+
+### Encrypted records
+
+Each record body after the handshake is `ChaCha20-Poly1305(key, nonce, message)` with no
+associated data. The nonce is 4 zero bytes followed by a `u64` counter that starts at 0 for each
+direction and increases by one per record. A record that fails to decrypt ends the connection.
+
+A decrypted message is:
 
 ```
 u8   type
-u32  length      payload bytes, excluding this 5-byte header
 ...  payload
 ```
 
+### Pairing and resuming
+
+After record 3, both sides send `hello`. Being able to decrypt the peer's `hello` proves the peer
+derived the same keys.
+
+- **Pair mode.** Both apps show the pairing code. The user confirms on the phone that the codes
+  match. The camera then sends `pairResult`. If accepted, both sides store the pairing key under
+  the peer's device id. Until then the camera ignores every other message.
+- **Resume mode.** The pairing key is mixed into the keys, so only a paired host can produce a
+  `hello` the camera can decrypt. No user action is needed.
+
 ## Messages
+
+JSON payloads are UTF-8 objects. Unknown fields are ignored and unknown message types are skipped,
+so newer apps can add both without breaking older ones.
 
 | Type | Name | Direction | Payload |
 | --- | --- | --- | --- |
-| 0x01 | hello | both | `u8` protocol version, then UTF-8 JSON: app version, device name, platform |
-| 0x02 | capabilities | phone → desktop | JSON: cameras, lenses, formats (size, frame rates, codecs), supported controls and their ranges |
-| 0x03 | configure | desktop → phone | JSON: camera, size, frame rate, codec, bitrate, keyframe interval |
-| 0x04 | videoConfig | phone → desktop | `u8` codec (0 = H.264, 1 = HEVC), `u16` width, `u16` height, `u16` rotation, `u32` length, decoder configuration record (`avcC` / `hvcC`) |
-| 0x05 | videoFrame | phone → desktop | `u64` capture timestamp in microseconds, `u8` flags (bit 0 = keyframe), one access unit |
-| 0x06 | control | desktop → phone | JSON: one control change (zoom, focus, exposure, white balance, torch, mirror…) |
-| 0x07 | controlState | phone → desktop | JSON: current value of every control |
-| 0x08 | requestKeyframe | desktop → phone | empty |
-| 0x09 | stats | phone → desktop | JSON: frame rate, bitrate, dropped frames, temperature state, battery |
-| 0x0A | log | phone → desktop | JSON: level, tag, message (remote diagnostics) |
-| 0x0B | ping | both | `u64` sender timestamp |
-| 0x0C | pong | both | the `u64` timestamp from the ping, for delay measurement |
-| 0x0F | bye | both | JSON: reason |
+| 0x01 | hello | both | JSON: `name`, `appVersion`, `platform`, `model` |
+| 0x02 | pairResult | camera → host | JSON: `accepted` |
+| 0x03 | capabilities | camera → host | JSON, see below |
+| 0x04 | configure | host → camera | JSON, see below |
+| 0x05 | startStream | host → camera | empty |
+| 0x06 | stopStream | host → camera | empty |
+| 0x10 | videoConfig | camera → host | binary, see below |
+| 0x11 | videoFrame | camera → host | binary, see below |
+| 0x12 | requestKeyframe | host → camera | empty |
+| 0x20 | control | host → camera | JSON: one control change |
+| 0x21 | controlState | camera → host | JSON: current value of every control |
+| 0x30 | stats | camera → host | JSON, about once a second while streaming |
+| 0x31 | log | camera → host | JSON: `level`, `tag`, `message` |
+| 0x3E | ping | both | `u64` sender timestamp in microseconds |
+| 0x3F | pong | both | the `u64` from the ping |
+| 0x7F | bye | both | JSON: `reason` |
 
-Unknown message types are skipped using the length field, so new messages do not break old apps.
+Types 0x18 to 0x1F are reserved for audio.
+
+### capabilities
+
+Sent by the camera after `hello` (after `pairResult` in pair mode), and again whenever they change.
+
+```json
+{
+  "cameras": [
+    {
+      "id": "back-wide",
+      "name": "Back Camera",
+      "position": "back",
+      "lens": "wide",
+      "formats": [{ "width": 1920, "height": 1080, "maxFps": 60 }]
+    }
+  ],
+  "codecs": ["hevc", "h264"],
+  "controls": {
+    "zoom": { "min": 1.0, "max": 10.0 },
+    "exposureBias": { "min": -8.0, "max": 8.0 },
+    "focus": ["auto", "locked", "manual"],
+    "whiteBalance": ["auto", "locked"],
+    "torch": true,
+    "stabilization": ["off", "standard", "cinematic"]
+  }
+}
+```
+
+`position` is `front`, `back` or `external`. `lens` is `wide`, `ultraWide`, `telephoto` or
+`other`. A control the camera does not support is absent.
+
+### configure
+
+Chooses what to stream. If the stream is running it restarts with the new settings.
+
+```json
+{
+  "camera": "back-wide",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "codec": "hevc",
+  "bitrate": 12000000,
+  "keyframeInterval": 2.0
+}
+```
+
+`bitrate` is in bits per second and `keyframeInterval` in seconds.
+
+### videoConfig
+
+Sent before the first frame and whenever the stream parameters change.
+
+```
+u8   codec       0 = H.264, 1 = HEVC
+u16  width       encoded picture width in pixels
+u16  height      encoded picture height in pixels
+u16  rotation    clockwise degrees the host must rotate the picture: 0, 90, 180 or 270
+u8   flags       bit 0 = mirror horizontally (front camera)
+u32  length
+...  decoder configuration record: `avcC` for H.264, `hvcC` for HEVC
+```
+
+### videoFrame
+
+```
+u64  capture timestamp in microseconds, on the camera's monotonic clock
+u8   flags       bit 0 = keyframe
+...  one access unit: NAL units, each preceded by its u32 length
+```
+
+This is the layout the phone's hardware encoder produces, so frames are sent without rewriting.
+
+### control and controlState
+
+`control` changes one thing; `controlState` reports everything.
+
+```json
+{ "zoom": 2.0 }
+{ "focus": "manual", "focusPosition": 0.4 }
+{ "focusPoint": { "x": 0.5, "y": 0.5 } }
+{ "exposureBias": -0.5 }
+{ "whiteBalance": "locked" }
+{ "torch": true }
+{ "stabilization": "standard" }
+```
+
+### stats
+
+```json
+{
+  "fps": 29.97,
+  "bitrate": 11840000,
+  "droppedFrames": 0,
+  "thermal": "nominal",
+  "battery": 0.82,
+  "charging": true
+}
+```
+
+`thermal` is `nominal`, `fair`, `serious` or `critical`.
 
 ## Flow control
 
 The sender tracks bytes queued but not yet written. Above a threshold it stops queueing video,
-drops frames until the next keyframe, and reports the drop in `stats`. If the peer reads nothing
-for five seconds, the connection is closed and re-established.
-
-## Audio
-
-Not in version 0. Message types 0x10 to 0x1F are reserved for it.
+drops frames until the next keyframe, and counts the drops in `stats`. If the peer reads nothing
+for five seconds, the connection is closed. Either side may send `ping` at any time; a peer that
+does not answer within five seconds is treated as gone.
