@@ -10,6 +10,7 @@ use paircam_engine::Engine;
 
 mod app;
 mod controls;
+mod gallery;
 mod settings;
 
 rust_i18n::i18n!("locales", fallback = "en");
@@ -34,6 +35,8 @@ struct Options {
     light: bool,
     /// Open the settings sheet as soon as the window opens.
     settings: bool,
+    /// Show the component gallery instead of the app.
+    gallery: bool,
 }
 
 fn options() -> Options {
@@ -46,6 +49,7 @@ fn options() -> Options {
             "--data" => options.data_directory = arguments.next().map(PathBuf::from),
             "--light" => options.light = true,
             "--settings" => options.settings = true,
+            "--gallery" => options.gallery = true,
             other => log::warn!("ignoring unknown option {other}"),
         }
     }
@@ -100,6 +104,18 @@ fn main() {
                 window_min_size: Some(size(px(880.), px(560.))),
                 ..TitleBar::window_options()
             };
+            if options.gallery {
+                gpui_kit::open_window(window_options, cx, |window, cx| {
+                    window.set_window_title("PairCam");
+                    if options.light {
+                        paircam_ui::set_mode(gpui_kit::component::ThemeMode::Light, cx);
+                    }
+                    cx.new(|cx| gallery::Gallery::new(window, cx))
+                })
+                .expect("failed to open the gallery window");
+                return;
+            }
+
             gpui_kit::open_window(window_options, cx, |window, cx| {
                 window.set_window_title("PairCam");
                 if options.light {
