@@ -1,0 +1,37 @@
+[package]
+name = "paircam-engine"
+description = "The PairCam desktop engine: discovery, pairing, receiving, decoding and the camera feed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+async-channel = "2"
+bytes = "1"
+log = "0.4"
+paircam-protocol = { path = "../protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_NetworkManagement_Dns",
+    "Win32_Networking_WinSock",
+] }
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+simple_logger = { version = "5", default-features = false, features = ["stderr"] }
+
+[lints]
+workspace = true

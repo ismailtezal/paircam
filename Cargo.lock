@@ -4532,6 +4532,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "paircam-engine"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "bytes",
+ "cc",
+ "log",
+ "paircam-protocol",
+ "serde",
+ "serde_json",
+ "simple_logger",
+ "thiserror 2.0.21",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "paircam-protocol"
 version = "0.1.0"
 dependencies = [
@@ -5938,6 +5954,16 @@ checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 dependencies = [
  "bstr",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "simple_logger"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7038d0e96661bf9ce647e1a6f6ef6d6f3663f66d9bf741abf14ba4876071c17"
+dependencies = [
+ "log",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
