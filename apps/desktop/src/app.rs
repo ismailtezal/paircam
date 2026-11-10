@@ -20,14 +20,26 @@ use gpui_kit::{
 use image::{Frame, RgbaImage};
 use paircam_engine::protocol::{Capabilities, ControlValues, DEFAULT_PORT, Stats, Thermal};
 use paircam_engine::{
-    Channels, Engine, Event, Failure, LinkStats, PairedCamera, Phase, PreviewFrame, VideoInfo,
+    Channels, DiscoveredCamera, Engine, Event, Failure, LinkStats, PairedCamera, Phase,
+    PreviewFrame, VideoInfo,
 };
 use paircam_ui::tokens::{font, radius};
-use paircam_ui::{LinkState, Stat, StatusPill, color, material, palette, panel, section_label};
+use paircam_ui::{
+    LinkState, Stat, StatusDot, StatusPill, color, material, palette, panel, section_label,
+};
 use smallvec::SmallVec;
 
 use crate::controls::StreamControls;
 use crate::text;
+
+/// One phone on the connect screen.
+struct PhoneRow {
+    name: String,
+    detail: SharedString,
+    address: Option<SocketAddr>,
+    /// Whether the phone is advertising on the network right now.
+    nearby: bool,
+}
 
 pub struct PairCamApp {
     engine: Engine,
@@ -35,6 +47,11 @@ pub struct PairCamApp {
     /// The address of the current or last connection, for "Try again".
     last_address: Option<SocketAddr>,
     paired: Vec<PairedCamera>,
+    /// Phones advertising on the network right now.
+    discovered: Vec<DiscoveredCamera>,
+    /// Whether to connect by itself when a paired phone appears. Turned off when the user
+    /// disconnects, so the app does not reconnect against their wishes.
+    auto_connect: bool,
     stream_controls: Option<StreamControls>,
     /// Whether the phone has reported its control values since the session began.
     controls_synced: bool,
@@ -100,6 +117,8 @@ impl PairCamApp {
 
         Self {
             paired: engine.paired_cameras(),
+            discovered: Vec::new(),
+            auto_connect: true,
             engine,
             phase: Phase::Idle,
             last_address: connect_to,
@@ -148,6 +167,10 @@ impl PairCamApp {
             Event::Video(video) => self.video = Some(video),
             Event::Link(link) => self.link = link,
             Event::CameraStats(stats) => self.camera_stats = Some(stats),
+            Event::Discovered(cameras) => {
+                self.discovered = cameras;
+                self.connect_to_a_paired_phone();
+            }
             Event::CameraLog(entry) => {
                 log::info!("phone [{}] {}", entry.tag, entry.message);
             }
@@ -183,6 +206,32 @@ impl PairCamApp {
         }
         self.retired_preview = self.preview.replace(image);
         cx.notify();
+    }
+
+    /// Ends the connection because the user asked to, and stays disconnected.
+    fn disconnect(&mut self) {
+        self.auto_connect = false;
+        self.engine.disconnect();
+    }
+
+    /// Connects to the first paired phone on the network, unless the user chose to disconnect
+    /// or something is already under way.
+    fn connect_to_a_paired_phone(&mut self) {
+        let free = matches!(
+            self.phase,
+            Phase::Idle | Phase::Failed(Failure::Lost | Failure::Unreachable)
+        );
+        if !self.auto_connect || !free {
+            return;
+        }
+        let paired_phone = self.discovered.iter().find(|camera| {
+            camera
+                .id
+                .is_some_and(|id| self.paired.iter().any(|paired| paired.id == id))
+        });
+        if let Some(camera) = paired_phone {
+            self.engine.connect(camera.address);
+        }
     }
 
     fn connect_to_typed_address(&mut self, cx: &mut Context<Self>) {
@@ -357,9 +406,52 @@ impl PairCamApp {
             )
     }
 
+    /// The phones to offer on the connect screen: the ones on the network first, then paired
+    /// phones that are not advertising right now, reachable at their last address.
+    fn phone_rows(&self) -> Vec<PhoneRow> {
+        let is_paired = |camera: &DiscoveredCamera| {
+            camera
+                .id
+                .is_some_and(|id| self.paired.iter().any(|paired| paired.id == id))
+        };
+        let nearby = self.discovered.iter().map(|camera| PhoneRow {
+            name: camera.name.clone(),
+            detail: if is_paired(camera) {
+                text!("connect.nearby_paired")
+            } else {
+                text!("connect.nearby")
+            },
+            address: Some(camera.address),
+            nearby: true,
+        });
+        let remembered = self
+            .paired
+            .iter()
+            .filter(|paired| {
+                !self
+                    .discovered
+                    .iter()
+                    .any(|camera| camera.id == Some(paired.id))
+            })
+            .map(|paired| PhoneRow {
+                name: paired.name.clone(),
+                detail: match paired.last_address {
+                    Some(address) => {
+                        text!("connect.last_seen_at", address = address.ip().to_string())
+                    }
+                    None => text!("connect.not_nearby"),
+                },
+                address: paired.last_address,
+                nearby: false,
+            });
+        nearby.chain(remembered).collect()
+    }
+
     fn connect_screen(&self, cx: &mut Context<Self>) -> AnyElement {
-        let phones = self.paired.iter().enumerate().map(|(index, camera)| {
-            let address = camera.last_address;
+        let rows = self.phone_rows();
+        let searching = rows.is_empty();
+        let phones = rows.into_iter().enumerate().map(|(index, phone)| {
+            let address = phone.address;
             div()
                 .h_flex()
                 .items_center()
@@ -384,32 +476,55 @@ impl PairCamApp {
                                 .text_size(px(font::size::BASE))
                                 .font_weight(FontWeight::MEDIUM)
                                 .truncate()
-                                .child(SharedString::from(camera.name.clone())),
+                                .child(SharedString::from(phone.name)),
                         )
-                        .when_some(address, |column, address| {
-                            column.child(
-                                div()
-                                    .text_size(px(font::size::XS))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(text!(
-                                        "connect.last_seen_at",
-                                        address = address.ip().to_string()
-                                    )),
-                            )
-                        }),
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1p5()
+                                .when(phone.nearby, |detail| {
+                                    detail.child(StatusDot::new(LinkState::Live))
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(font::size::XS))
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(phone.detail),
+                                ),
+                        ),
                 )
                 .when_some(address, |row, address| {
                     row.child(
-                        Button::new(("connect-paired", index))
-                            .primary()
+                        Button::new(("connect-phone", index))
                             .small()
+                            .when(phone.nearby, |button| button.primary())
                             .label(text!("connect.connect"))
                             .on_click(cx.listener(move |this, _, _, _| {
+                                this.auto_connect = true;
                                 this.engine.connect(address);
                             })),
                     )
                 })
         });
+
+        let list = if searching {
+            panel(cx)
+                .h_flex()
+                .items_center()
+                .gap_3()
+                .px_3()
+                .py_3()
+                .child(Spinner::new().small())
+                .child(
+                    div()
+                        .text_size(px(font::size::BASE))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(text!("connect.searching")),
+                )
+        } else {
+            panel(cx).v_flex().children(phones)
+        };
 
         Self::centered(cx)
             .child(Self::badge_icon(IconName::Smartphone, cx))
@@ -418,16 +533,14 @@ impl PairCamApp {
                 text!("connect.subtitle"),
                 cx,
             ))
-            .when(!self.paired.is_empty(), |screen| {
-                screen.child(
-                    div()
-                        .v_flex()
-                        .gap_2()
-                        .w(px(420.))
-                        .child(section_label(text!("connect.paired"), cx))
-                        .child(panel(cx).v_flex().children(phones)),
-                )
-            })
+            .child(
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .w(px(420.))
+                    .child(section_label(text!("connect.phones"), cx))
+                    .child(list),
+            )
             .child(
                 div()
                     .h_flex()
@@ -438,6 +551,7 @@ impl PairCamApp {
                         Button::new("connect-address")
                             .label(text!("connect.by_address"))
                             .on_click(cx.listener(|this, _, _, cx| {
+                                this.auto_connect = true;
                                 this.connect_to_typed_address(cx);
                             })),
                     ),
@@ -448,7 +562,7 @@ impl PairCamApp {
     fn cancel_button(label: SharedString, cx: &mut Context<Self>) -> impl IntoElement {
         Button::new("cancel")
             .label(label)
-            .on_click(cx.listener(|this, _, _, _| this.engine.disconnect()))
+            .on_click(cx.listener(|this, _, _, _| this.disconnect()))
     }
 
     fn connecting_screen(&self, address: SocketAddr, cx: &mut Context<Self>) -> AnyElement {
@@ -720,7 +834,7 @@ impl PairCamApp {
                         Button::new("disconnect")
                             .label(text!("inspector.disconnect"))
                             .w_full()
-                            .on_click(cx.listener(|this, _, _, _| this.engine.disconnect())),
+                            .on_click(cx.listener(|this, _, _, _| this.disconnect())),
                     ),
             )
     }

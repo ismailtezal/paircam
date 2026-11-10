@@ -14,10 +14,12 @@ pub use paircam_protocol as protocol;
 use paircam_protocol::{Capabilities, Codec, ControlValues, DeviceId, LogEntry, Message, Stats};
 
 pub mod decoder;
+pub mod discovery;
 mod session;
 mod store;
 
 pub use decoder::Nv12Frame;
+pub use discovery::DiscoveredCamera;
 pub use store::{PairedCamera, StreamPreferences};
 
 /// Where the connection to a phone stands.
@@ -81,6 +83,8 @@ pub struct LinkStats {
 #[derive(Clone, Debug)]
 pub enum Event {
     Phase(Phase),
+    /// The phones currently advertising themselves on the network.
+    Discovered(Vec<DiscoveredCamera>),
     Capabilities(Capabilities),
     ControlState(ControlValues),
     Video(VideoInfo),
@@ -122,6 +126,8 @@ pub(crate) struct Inner {
     pub(crate) preview_max_width: AtomicU32,
     session: Mutex<Option<Arc<session::Shared>>>,
     next_session_id: AtomicU64,
+    /// Kept alive so the search for phones runs as long as the engine does.
+    _discovery: Option<discovery::Discovery>,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -153,6 +159,11 @@ impl Engine {
     pub fn new(data_directory: &Path, host_name: impl Into<String>) -> (Self, Channels) {
         let (events, events_receiver) = async_channel::unbounded();
         let (preview, preview_receiver) = async_channel::bounded(1);
+        let discovered = events.clone();
+        let discovery =
+            discovery::Discovery::start(paircam_protocol::SERVICE_TYPE, move |cameras| {
+                let _ = discovered.try_send(Event::Discovered(cameras));
+            });
         let inner = Arc::new(Inner {
             events,
             preview,
@@ -162,6 +173,7 @@ impl Engine {
             preview_max_width: AtomicU32::new(1280),
             session: Mutex::new(None),
             next_session_id: AtomicU64::new(1),
+            _discovery: discovery,
         });
         (
             Self { inner },

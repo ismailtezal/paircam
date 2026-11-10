@@ -14,8 +14,10 @@ status:
 connect:
   title: iPhone’unu bağla
   subtitle: iPhone’unda PairCam’i aç. İki cihaz da aynı Wi-Fi ağında olmalı.
-  paired: Telefonların
-  nearby: Yakındakiler
+  phones: TELEFONLAR
+  nearby: Bu ağda
+  nearby_paired: Bu ağda · eşleştirilmiş
+  not_nearby: Bu ağda değil
   searching: Bu ağdaki telefonlar aranıyor…
   connect: Bağlan
   by_address: Adresle bağlan

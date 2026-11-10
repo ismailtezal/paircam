@@ -20,11 +20,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use paircam_engine::discovery::Advertisement;
 use paircam_engine::protocol::{
     CameraHandshake, CameraInfo, Capabilities, Codec, Configure, ControlCapabilities,
     ControlValues, DEFAULT_PORT, DeviceId, FocusMode, Format, Hello, Lens, Message, Mode, Opener,
-    PairResult, PairingKey, Position, Range, Sealer, Stabilization, Stats, Status, Thermal,
-    UNPAIRED, VideoConfig, VideoFrame, WhiteBalanceMode, random_bytes, read_record, write_record,
+    PairResult, PairingKey, Position, Range, SERVICE_TYPE, Sealer, Stabilization, Stats, Status,
+    Thermal, UNPAIRED, VideoConfig, VideoFrame, WhiteBalanceMode, random_bytes, read_record,
+    write_record,
 };
 
 struct Options {
@@ -81,6 +83,18 @@ fn main() {
         "simulator: \"{}\" listening on port {}",
         options.name, options.port
     );
+
+    // Advertise like the phone does, so the desktop finds the simulator by itself.
+    let id = camera_id.to_hex();
+    let advertised = Advertisement::start(
+        SERVICE_TYPE,
+        &options.name,
+        options.port,
+        &[("v", "0"), ("id", &id), ("name", &options.name)],
+    );
+    if advertised.is_none() {
+        println!("simulator: could not advertise on the network; connect by address instead");
+    }
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };

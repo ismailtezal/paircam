@@ -14,8 +14,10 @@ status:
 connect:
   title: Connect your iPhone
   subtitle: Open PairCam on your iPhone. Both devices need to be on the same Wi-Fi.
-  paired: Your phones
-  nearby: Nearby
+  phones: PHONES
+  nearby: On this network
+  nearby_paired: On this network · paired
+  not_nearby: Not on this network
   searching: Looking for phones on this network…
   connect: Connect
   by_address: Connect by address
