@@ -1,6 +1,7 @@
 //! The main window: one view that follows the engine's state and shows the matching screen.
 
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
@@ -8,7 +9,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, Sizable as _, StyledExt as _, Theme, ThemeMode, TitleBar,
+    ActiveTheme as _, Icon, Placement, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -30,6 +31,7 @@ use paircam_ui::{
 use smallvec::SmallVec;
 
 use crate::controls::StreamControls;
+use crate::settings::{self, Appearance, Preferences, SettingsView};
 use crate::text;
 
 /// One phone on the connect screen.
@@ -64,6 +66,8 @@ pub struct PairCamApp {
     /// loses a picture it is still drawing.
     retired_preview: Option<Arc<RenderImage>>,
     address: Entity<InputState>,
+    data_directory: PathBuf,
+    preferences: Preferences,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -72,9 +76,20 @@ impl PairCamApp {
         engine: Engine,
         channels: Channels,
         connect_to: Option<SocketAddr>,
+        show_settings: bool,
+        data_directory: PathBuf,
+        preferences: Preferences,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Follow Windows when it switches between light and dark, if the user asked for that.
+        cx.observe_window_appearance(window, |this, window, cx| {
+            if this.preferences.appearance == Appearance::System {
+                settings::apply_appearance(Appearance::System, window, cx);
+            }
+        })
+        .detach();
+
         let address = cx.new(|cx| {
             InputState::new(window, cx).placeholder(text!("connect.address_placeholder"))
         });
@@ -114,6 +129,9 @@ impl PairCamApp {
         if let Some(address) = connect_to {
             engine.connect(address);
         }
+        if show_settings {
+            cx.defer_in(window, |this, window, cx| this.open_settings(window, cx));
+        }
 
         Self {
             paired: engine.paired_cameras(),
@@ -131,6 +149,8 @@ impl PairCamApp {
             preview: None,
             retired_preview: None,
             address,
+            data_directory,
+            preferences,
             _subscriptions: subscriptions,
         }
     }
@@ -286,13 +306,45 @@ impl PairCamApp {
         cx.notify();
     }
 
-    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
-        let mode = if Theme::global(cx).is_dark() {
-            ThemeMode::Light
-        } else {
-            ThemeMode::Dark
-        };
-        paircam_ui::set_mode(mode, cx);
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let app = cx.weak_entity();
+        let engine = self.engine.clone();
+        let directory = self.data_directory.clone();
+        let preferences = self.preferences.clone();
+        let view = cx.new(|cx| SettingsView::new(app, engine, directory, preferences, window, cx));
+        window.open_sheet_at(Placement::Right, cx, move |sheet, _, _| {
+            sheet
+                .title(text!("settings.title"))
+                .size(px(360.))
+                .child(view.clone())
+        });
+    }
+
+    /// The settings sheet changed how the app should look.
+    pub(crate) fn set_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+        self.preferences.appearance = appearance;
+        cx.notify();
+    }
+
+    /// The settings sheet changed the language: rebuild text that was built once.
+    pub(crate) fn language_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preferences = Preferences::load(&self.data_directory);
+        self.address.update(cx, |address, cx| {
+            address.set_placeholder(text!("connect.address_placeholder"), window, cx);
+        });
+        if let Some(capabilities) = self
+            .stream_controls
+            .as_ref()
+            .map(|controls| controls.capabilities().clone())
+        {
+            self.rebuild_stream_controls(capabilities, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// The settings sheet forgot a phone.
+    pub(crate) fn paired_changed(&mut self, cx: &mut Context<Self>) {
+        self.paired = self.engine.paired_cameras();
         cx.notify();
     }
 
@@ -315,12 +367,6 @@ impl PairCamApp {
 
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (state, label) = self.status();
-        let theme_icon = if cx.theme().is_dark() {
-            IconName::Sun
-        } else {
-            IconName::Moon
-        };
-
         TitleBar::new()
             .child(
                 div()
@@ -337,12 +383,14 @@ impl PairCamApp {
             )
             .child(
                 div().h_flex().items_center().pr_1().child(
-                    Button::new("toggle-theme")
+                    Button::new("open-settings")
                         .ghost()
                         .small()
-                        .icon(theme_icon)
-                        .tooltip(text!("theme.toggle"))
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx))),
+                        .icon(IconName::Settings)
+                        .tooltip(text!("settings.title"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_settings(window, cx);
+                        })),
                 ),
             )
     }

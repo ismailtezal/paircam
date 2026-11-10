@@ -4533,6 +4533,8 @@ dependencies = [
  "paircam-engine",
  "paircam-ui",
  "rust-i18n",
+ "serde",
+ "serde_json",
  "simple_logger",
  "smallvec",
  "sys-locale",

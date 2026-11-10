@@ -94,5 +94,17 @@ thermal:
   critical: Too hot
   unknown: Unknown
 
-theme:
-  toggle: Switch between dark and light
+settings:
+  title: Settings
+  appearance: APPEARANCE
+  dark: Dark
+  light: Light
+  system: Match Windows
+  language: LANGUAGE
+  language_system: Match Windows
+  phones: PAIRED PHONES
+  no_phones: No phones are paired yet.
+  forget: Forget
+  about: ABOUT
+  version: "PairCam %{version}"
+  licence: Free and open source under the MIT licence.

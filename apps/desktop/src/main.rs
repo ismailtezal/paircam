@@ -10,6 +10,7 @@ use paircam_engine::Engine;
 
 mod app;
 mod controls;
+mod settings;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -31,6 +32,8 @@ struct Options {
     /// Keep settings in this folder instead of the user's app data.
     data_directory: Option<PathBuf>,
     light: bool,
+    /// Open the settings sheet as soon as the window opens.
+    settings: bool,
 }
 
 fn options() -> Options {
@@ -42,6 +45,7 @@ fn options() -> Options {
             "--locale" => options.locale = arguments.next(),
             "--data" => options.data_directory = arguments.next().map(PathBuf::from),
             "--light" => options.light = true,
+            "--settings" => options.settings = true,
             other => log::warn!("ignoring unknown option {other}"),
         }
     }
@@ -62,42 +66,30 @@ fn host_name() -> String {
         .unwrap_or_else(|| "PC".to_owned())
 }
 
-/// Picks the interface language: the first system language PairCam has, otherwise English.
-fn system_locale() -> String {
-    let available = rust_i18n::available_locales!();
-    sys_locale::get_locales()
-        .filter_map(|locale| locale.split(['-', '_']).next().map(str::to_lowercase))
-        .find(|language| {
-            available
-                .iter()
-                .any(|locale| locale.as_ref() == language.as_str())
-        })
-        .unwrap_or_else(|| "en".to_owned())
-}
-
 fn main() {
     let _ = simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Info)
         .init();
 
     let options = options();
-    rust_i18n::set_locale(&options.locale.clone().unwrap_or_else(system_locale));
-
-    let (engine, channels) = Engine::new(
-        &options
-            .data_directory
-            .clone()
-            .unwrap_or_else(data_directory),
-        host_name(),
+    let data_directory = options
+        .data_directory
+        .clone()
+        .unwrap_or_else(data_directory);
+    let preferences = settings::Preferences::load(&data_directory);
+    settings::apply_language(
+        options
+            .locale
+            .as_deref()
+            .or(preferences.language.as_deref()),
     );
+
+    let (engine, channels) = Engine::new(&data_directory, host_name());
 
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             paircam_ui::init(cx).expect("failed to set up the PairCam theme");
-            if options.light {
-                paircam_ui::set_mode(gpui_kit::component::ThemeMode::Light, cx);
-            }
 
             let window_options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -110,7 +102,23 @@ fn main() {
             };
             gpui_kit::open_window(window_options, cx, |window, cx| {
                 window.set_window_title("PairCam");
-                cx.new(|cx| app::PairCamApp::new(engine, channels, options.connect, window, cx))
+                if options.light {
+                    paircam_ui::set_mode(gpui_kit::component::ThemeMode::Light, cx);
+                } else {
+                    settings::apply_appearance(preferences.appearance, window, cx);
+                }
+                cx.new(|cx| {
+                    app::PairCamApp::new(
+                        engine,
+                        channels,
+                        options.connect,
+                        options.settings,
+                        data_directory,
+                        preferences,
+                        window,
+                        cx,
+                    )
+                })
             })
             .expect("failed to open the main window");
         });

@@ -94,5 +94,17 @@ thermal:
   critical: Çok sıcak
   unknown: Bilinmiyor
 
-theme:
-  toggle: Koyu ve açık tema arasında geçiş yap
+settings:
+  title: Ayarlar
+  appearance: GÖRÜNÜM
+  dark: Koyu
+  light: Açık
+  system: Windows’a uy
+  language: DİL
+  language_system: Windows’a uy
+  phones: EŞLEŞTİRİLMİŞ TELEFONLAR
+  no_phones: Henüz eşleştirilmiş telefon yok.
+  forget: Unut
+  about: HAKKINDA
+  version: "PairCam %{version}"
+  licence: MIT lisansıyla özgür ve açık kaynak.
