@@ -4528,6 +4528,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
+ "paircam-ui",
 ]
 
 [[package]]
@@ -4544,6 +4545,14 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.21",
  "x25519-dalek",
+]
+
+[[package]]
+name = "paircam-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
 ]
 
 [[package]]
