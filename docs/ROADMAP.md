@@ -1,17 +1,20 @@
 # Roadmap
 
-Each phase ends in something that can be used or shown.
+Each phase ends in something that can be used or shown. The first target is the iPhone app with
+the Windows 11 desktop app; Android comes after that is solid.
 
 ## Phase 0: foundation
 
-- [x] Repository, licence, working rules, architecture and protocol drafts
-- [ ] Toolchain on the development PC: Rust, Windows 11 SDK, Expo and EAS accounts linked
-- [ ] Monorepo tooling: workspaces, TypeScript, lint, format, CI
-- [ ] Design tokens and the generated desktop and phone themes
-- [ ] Desktop component set and a design-system page, approved before any screen is built
+- [x] Repository, licence, working rules, architecture, design direction and protocol drafts
+- [ ] Toolchain on the development PC: Windows 11 SDK, Expo and EAS accounts linked to the Apple
+      Developer account (Rust is installed)
+- [ ] Workspace tooling: Cargo workspace, TypeScript, lint, format, CI
+- [ ] Design tokens and the generated desktop (GPUI Kit) and phone themes
+- [ ] Desktop component gallery in both themes, approved before any screen is built
 - [ ] Translation catalogs (English source, device language, Turkish as the first translation) in both apps
-- [ ] Virtual camera spike: a test pattern visible as "Kadraj Camera" in Zoom, Teams, Meet (Chrome),
+- [ ] Virtual camera spike: a test pattern visible as "PairCam" in Zoom, Teams, Meet (Chrome),
       Discord and OBS
+- [ ] Preview spike: live video drawn smoothly in a GPUI window on Windows
 - [ ] Phone build pipeline: EAS Build to TestFlight, with an empty app installed on a real iPhone
 - [ ] Remote diagnostics: phone logs and stats visible in the desktop app
 

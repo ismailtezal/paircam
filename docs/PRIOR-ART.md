@@ -1,7 +1,7 @@
 # Prior art
 
 Open-source projects studied before starting, what each one teaches, and whether its code may be
-reused. Kadraj is MIT, so only MIT, BSD and Apache code can be copied (with notices kept).
+reused. PairCam is MIT, so only MIT, BSD and Apache code can be copied (with notices kept).
 GPL projects are for reading only.
 
 ## Phone side
@@ -18,8 +18,16 @@ GPL projects are for reading only.
 | --- | --- | --- |
 | [VCamSample](https://github.com/smourier/VCamSample) | MIT | Minimal Windows 11 Media Foundation virtual camera. |
 | [Windows-Camera samples](https://github.com/microsoft/Windows-Camera/tree/master/Samples/VirtualCamera) | MIT | Microsoft's official virtual camera sample, with installer and tests. |
-| [neon](https://github.com/newdee/neon) | MIT | A C++ engine feeding a Media Foundation virtual camera over a named pipe, with a Tauri 2 control app. |
+| [neon](https://github.com/newdee/neon) | MIT | A C++ engine feeding a Media Foundation virtual camera over a named pipe, with a separate control app. |
 | [softcam](https://github.com/tshino/softcam) | MIT | The older DirectShow virtual camera. Not used: apps on the newer Windows camera stack do not see it. |
+
+## Interface
+
+| Project | Licence | What it teaches |
+| --- | --- | --- |
+| [GPUI](https://github.com/zed-industries/zed) | Apache-2.0 | The GPU-accelerated Rust UI framework from Zed that the desktop app is built on. |
+| [GPUI Kit](https://github.com/longbridge/gpui-kit) | Apache-2.0 | The shadcn-based component system for GPUI, themed with JSON; the base of the desktop components. |
+| [React Native Reusables](https://github.com/founded-labs/react-native-reusables) | MIT | shadcn-style components for React Native; the base of the phone components. |
 
 ## Read only (GPL)
 

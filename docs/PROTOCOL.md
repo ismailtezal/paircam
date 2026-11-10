@@ -1,7 +1,7 @@
-# Kadraj protocol
+# PairCam protocol
 
 **Version 0: draft.** This will change until the first working end-to-end build; after that,
-every change bumps the version and updates the test vectors in `packages/protocol`.
+every change bumps the version and updates the test vectors in `protocol/vectors`.
 
 ## Goals
 
@@ -12,7 +12,7 @@ every change bumps the version and updates the test vectors in `packages/protoco
 
 ## Discovery and pairing
 
-- The desktop app advertises `_kadraj._tcp` over mDNS. The phone lists what it finds.
+- The desktop app advertises `_paircam._tcp` over mDNS. The phone lists what it finds.
 - First pairing: the desktop shows a QR code holding its address, port and a one-time secret.
   The phone scans it, both sides derive a long-term key, and later connections are automatic.
 - Over Wi-Fi the phone connects to the desktop (the desktop listens). Over USB the direction is

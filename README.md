@@ -1,6 +1,6 @@
-# Kadraj
+# PairCam
 
-Use your phone as a high-quality webcam on your PC, over Wi-Fi or USB. Free and open source.
+Use your iPhone as a high-quality webcam on your PC, over Wi-Fi or USB. Free and open source.
 
 > **Status: pre-alpha.** Nothing is usable yet. This repository currently holds the plan and the
 > foundation; see [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -8,13 +8,13 @@ Use your phone as a high-quality webcam on your PC, over Wi-Fi or USB. Free and 
 ## Why
 
 Existing phone-as-webcam apps either lock HD, extra lenses and watermark-free video behind a
-subscription, or they are unreliable. Kadraj aims to be the one you would pick even if the others
+subscription, or they are unreliable. PairCam aims to be the one you would pick even if the others
 were free: full camera quality, low delay, and a desktop app that feels like a real product.
 
 ## How it works
 
 ```
-Phone app ──(Wi-Fi or USB)──▶ Desktop app ──▶ "Kadraj Camera" in Zoom, Teams, Meet, Discord, OBS
+iPhone app ──(Wi-Fi or USB)──▶ Desktop app ──▶ "PairCam" camera in Zoom, Teams, Meet, Discord, OBS
 ```
 
 - The **phone** captures the camera and compresses it with its hardware encoder (HEVC or H.264).
@@ -24,13 +24,15 @@ Phone app ──(Wi-Fi or USB)──▶ Desktop app ──▶ "Kadraj Camera" in
 
 | Part | Built with |
 | --- | --- |
-| Phone app (iOS, Android) | React Native (Expo) for the interface; native camera engines in Swift and Kotlin |
-| Desktop app (Windows 11) | Tauri 2, React, Tailwind CSS, shadcn/ui |
+| iPhone app | React Native (Expo) for the interface; a native camera engine in Swift |
+| Desktop app (Windows 11) | Rust and GPUI, with GPUI Kit components under a custom theme |
 | Desktop video engine | Rust, FFmpeg with hardware decoding |
 | Virtual camera | C++, Windows 11 Media Foundation virtual camera (no driver) |
 
-More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PROTOCOL.md](docs/PROTOCOL.md),
-[docs/PRIOR-ART.md](docs/PRIOR-ART.md).
+Android is planned after the iPhone app is solid.
+
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DESIGN.md](docs/DESIGN.md),
+[docs/PROTOCOL.md](docs/PROTOCOL.md), [docs/PRIOR-ART.md](docs/PRIOR-ART.md).
 
 ## License
 
