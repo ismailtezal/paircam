@@ -9,7 +9,7 @@ Each phase ends in something that can be used or shown.
 - [ ] Monorepo tooling: workspaces, TypeScript, lint, format, CI
 - [ ] Design tokens and the generated desktop and phone themes
 - [ ] Desktop component set and a design-system page, approved before any screen is built
-- [ ] Translation catalogs (Turkish default, English) in both apps
+- [ ] Translation catalogs (English source, device language, Turkish as the first translation) in both apps
 - [ ] Virtual camera spike: a test pattern visible as "Kadraj Camera" in Zoom, Teams, Meet (Chrome),
       Discord and OBS
 - [ ] Phone build pipeline: EAS Build to TestFlight, with an empty app installed on a real iPhone

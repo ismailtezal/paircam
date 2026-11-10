@@ -34,9 +34,10 @@ Before building a feature, look at how the best app does it and follow that inte
 
 ## Languages
 
-Turkish is the default language and English is the second. Every user-visible string lives in a
-translation catalog with identical keys in both languages; no literals in components.
-Code, comments, commit messages and docs are in English.
+Kadraj is a global product. English is the source and fallback language, and the apps follow the
+device language. Every user-visible string lives in a translation catalog so languages can be
+added without touching components (Turkish is the first additional one); no literals in
+components. Code, comments, commit messages and docs are in English.
 
 ## Code
 
