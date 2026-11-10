@@ -1,0 +1,96 @@
+_version: 1
+
+app:
+  name: PairCam
+
+status:
+  idle: Not connected
+  connecting: Connecting
+  pairing: Pairing
+  connected: Connected
+  live: Live
+  failed: Disconnected
+
+connect:
+  title: Connect your iPhone
+  subtitle: Open PairCam on your iPhone. Both devices need to be on the same Wi-Fi.
+  paired: Your phones
+  nearby: Nearby
+  searching: Looking for phones on this network…
+  connect: Connect
+  by_address: Connect by address
+  address_placeholder: 192.168.1.20
+  last_seen_at: "Last seen at %{address}"
+
+connecting:
+  title: Connecting…
+  subtitle: "Reaching %{address}"
+  cancel: Cancel
+
+pairing:
+  title: Confirm this code on your iPhone
+  subtitle: "%{name} is showing the same code. Tap Allow there if it matches."
+  cancel: Cancel
+
+failed:
+  title: The connection ended
+  unreachable: The phone did not answer. Check that PairCam is open on it and that both devices are on the same Wi-Fi.
+  busy: The phone is already streaming to another computer.
+  version_mismatch: The phone app and this app are different versions. Update both and try again.
+  pairing_declined: Pairing was declined on the phone.
+  lost: The connection to the phone was lost.
+  protocol: "Something unexpected came from the phone: %{detail}"
+  retry: Try again
+  back: Back
+
+live:
+  waiting: Waiting for video…
+  resolution: RESOLUTION
+  fps: FPS
+  bitrate: BITRATE
+  bitrate_unit: Mbps
+  delay: PING
+  delay_unit: ms
+  decoder: DECODER
+  decoder_gpu: GPU
+  decoder_cpu: CPU
+
+inspector:
+  device: DEVICE
+  battery: Battery
+  charging: charging
+  temperature: Temperature
+  disconnect: Disconnect
+  stream: STREAM
+  camera: Camera
+  resolution: Resolution
+  frame_rate: Frame rate
+  frame_rate_value: "%{fps} fps"
+  quality: Quality
+  codec: Format
+  controls: CAMERA
+  zoom: Zoom
+  exposure: Exposure
+  torch: Flashlight
+  focus_lock: Lock focus
+  white_balance_lock: Lock white balance
+
+quality:
+  low: "Low · 6 Mbps"
+  medium: "Medium · 12 Mbps"
+  high: "High · 20 Mbps"
+  maximum: "Maximum · 40 Mbps"
+
+codec:
+  hevc: HEVC (H.265)
+  h264: H.264
+
+thermal:
+  nominal: Normal
+  fair: Warm
+  serious: Hot
+  critical: Too hot
+  unknown: Unknown
+
+theme:
+  toggle: Switch between dark and light

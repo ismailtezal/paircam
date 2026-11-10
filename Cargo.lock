@@ -4528,7 +4528,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
+ "image",
+ "log",
+ "paircam-engine",
  "paircam-ui",
+ "rust-i18n",
+ "simple_logger",
+ "smallvec",
+ "sys-locale",
 ]
 
 [[package]]

@@ -31,6 +31,8 @@ struct Options {
     port: u16,
     name: String,
     decline: bool,
+    /// How long the simulated user takes to answer a pairing request, in milliseconds.
+    pair_delay: u64,
     encoder: Option<String>,
     ffmpeg: PathBuf,
 }
@@ -40,6 +42,7 @@ fn options() -> Options {
         port: DEFAULT_PORT,
         name: "Simulated iPhone".into(),
         decline: false,
+        pair_delay: 1500,
         encoder: None,
         ffmpeg: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../third_party/ffmpeg/bin/ffmpeg.exe"),
@@ -51,6 +54,7 @@ fn options() -> Options {
             "--port" => options.port = value().parse().expect("a port number"),
             "--name" => options.name = value(),
             "--decline" => options.decline = true,
+            "--pair-delay" => options.pair_delay = value().parse().expect("milliseconds"),
             "--encoder" => options.encoder = Some(value()),
             "--ffmpeg" => options.ffmpeg = PathBuf::from(value()),
             other => panic!("unknown option {other}"),
@@ -145,7 +149,7 @@ fn serve(
             host_hello.name,
             keys.pairing_code_digits()
         );
-        thread::sleep(Duration::from_millis(1500));
+        thread::sleep(Duration::from_millis(options.pair_delay));
         let accepted = !options.decline;
         send(&writer, &Message::PairResult(PairResult { accepted }));
         if !accepted {

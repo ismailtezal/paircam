@@ -1,0 +1,96 @@
+_version: 1
+
+app:
+  name: PairCam
+
+status:
+  idle: Bağlı değil
+  connecting: Bağlanıyor
+  pairing: Eşleştiriliyor
+  connected: Bağlandı
+  live: Canlı
+  failed: Bağlantı kesildi
+
+connect:
+  title: iPhone’unu bağla
+  subtitle: iPhone’unda PairCam’i aç. İki cihaz da aynı Wi-Fi ağında olmalı.
+  paired: Telefonların
+  nearby: Yakındakiler
+  searching: Bu ağdaki telefonlar aranıyor…
+  connect: Bağlan
+  by_address: Adresle bağlan
+  address_placeholder: 192.168.1.20
+  last_seen_at: "Son görüldüğü adres: %{address}"
+
+connecting:
+  title: Bağlanıyor…
+  subtitle: "%{address} adresine ulaşılıyor"
+  cancel: Vazgeç
+
+pairing:
+  title: Bu kodu iPhone’unda onayla
+  subtitle: "%{name} aynı kodu gösteriyor. Kodlar eşleşiyorsa telefonda İzin Ver’e dokun."
+  cancel: Vazgeç
+
+failed:
+  title: Bağlantı sona erdi
+  unreachable: Telefon yanıt vermedi. Telefonda PairCam’in açık olduğunu ve iki cihazın aynı Wi-Fi ağında olduğunu kontrol et.
+  busy: Telefon şu anda başka bir bilgisayara yayın yapıyor.
+  version_mismatch: Telefondaki uygulama ile bu uygulamanın sürümleri farklı. İkisini de güncelleyip tekrar dene.
+  pairing_declined: Eşleştirme telefonda reddedildi.
+  lost: Telefonla bağlantı koptu.
+  protocol: "Telefondan beklenmeyen bir yanıt geldi: %{detail}"
+  retry: Tekrar dene
+  back: Geri
+
+live:
+  waiting: Görüntü bekleniyor…
+  resolution: ÇÖZÜNÜRLÜK
+  fps: FPS
+  bitrate: BİT HIZI
+  bitrate_unit: Mbps
+  delay: PING
+  delay_unit: ms
+  decoder: ÇÖZÜCÜ
+  decoder_gpu: GPU
+  decoder_cpu: CPU
+
+inspector:
+  device: CİHAZ
+  battery: Pil
+  charging: şarj oluyor
+  temperature: Sıcaklık
+  disconnect: Bağlantıyı kes
+  stream: YAYIN
+  camera: Kamera
+  resolution: Çözünürlük
+  frame_rate: Kare hızı
+  frame_rate_value: "%{fps} fps"
+  quality: Kalite
+  codec: Biçim
+  controls: KAMERA
+  zoom: Yakınlaştırma
+  exposure: Pozlama
+  torch: El feneri
+  focus_lock: Odağı kilitle
+  white_balance_lock: Beyaz dengesini kilitle
+
+quality:
+  low: "Düşük · 6 Mbps"
+  medium: "Orta · 12 Mbps"
+  high: "Yüksek · 20 Mbps"
+  maximum: "En yüksek · 40 Mbps"
+
+codec:
+  hevc: HEVC (H.265)
+  h264: H.264
+
+thermal:
+  nominal: Normal
+  fair: Ilık
+  serious: Sıcak
+  critical: Çok sıcak
+  unknown: Bilinmiyor
+
+theme:
+  toggle: Koyu ve açık tema arasında geçiş yap
