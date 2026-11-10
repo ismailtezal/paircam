@@ -9,6 +9,7 @@ use gpui_kit::{AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 use paircam_engine::Engine;
 
 mod app;
+mod controls;
 
 rust_i18n::i18n!("locales", fallback = "en");
 

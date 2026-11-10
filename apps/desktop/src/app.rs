@@ -12,9 +12,10 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Entity, FontWeight, IntoElement, ObjectFit,
-    ParentElement as _, Render, RenderImage, SharedString, Styled as _, StyledImage as _,
-    Subscription, Window, black, div, img, px,
+    AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
+    ObjectFit, ParentElement as _, Render, RenderImage, SharedString,
+    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription, Window, black,
+    div, img, px,
 };
 use image::{Frame, RgbaImage};
 use paircam_engine::protocol::{Capabilities, ControlValues, DEFAULT_PORT, Stats, Thermal};
@@ -25,6 +26,7 @@ use paircam_ui::tokens::{font, radius};
 use paircam_ui::{LinkState, Stat, StatusPill, color, material, palette, panel, section_label};
 use smallvec::SmallVec;
 
+use crate::controls::StreamControls;
 use crate::text;
 
 pub struct PairCamApp {
@@ -33,7 +35,9 @@ pub struct PairCamApp {
     /// The address of the current or last connection, for "Try again".
     last_address: Option<SocketAddr>,
     paired: Vec<PairedCamera>,
-    capabilities: Option<Capabilities>,
+    stream_controls: Option<StreamControls>,
+    /// Whether the phone has reported its control values since the session began.
+    controls_synced: bool,
     controls: ControlValues,
     video: Option<VideoInfo>,
     link: LinkStats,
@@ -99,7 +103,8 @@ impl PairCamApp {
             engine,
             phase: Phase::Idle,
             last_address: connect_to,
-            capabilities: None,
+            stream_controls: None,
+            controls_synced: false,
             controls: ControlValues::default(),
             video: None,
             link: LinkStats::default(),
@@ -122,8 +127,24 @@ impl PairCamApp {
                 self.paired = self.engine.paired_cameras();
                 self.phase = phase;
             }
-            Event::Capabilities(capabilities) => self.capabilities = Some(capabilities),
-            Event::ControlState(controls) => self.controls = controls,
+            Event::Capabilities(capabilities) => {
+                self.rebuild_stream_controls(capabilities, window, cx)
+            }
+            Event::ControlState(controls) => {
+                self.controls = controls;
+                // The sliders start from the first values the phone reports. Later reports echo
+                // the user’s own changes and must not rebuild a slider that is being dragged.
+                if !self.controls_synced {
+                    self.controls_synced = true;
+                    if let Some(capabilities) = self
+                        .stream_controls
+                        .as_ref()
+                        .map(|controls| controls.capabilities().clone())
+                    {
+                        self.rebuild_stream_controls(capabilities, window, cx);
+                    }
+                }
+            }
             Event::Video(video) => self.video = Some(video),
             Event::Link(link) => self.link = link,
             Event::CameraStats(stats) => self.camera_stats = Some(stats),
@@ -135,7 +156,9 @@ impl PairCamApp {
     }
 
     fn end_session(&mut self, window: &mut Window) {
-        self.capabilities = None;
+        self.stream_controls = None;
+        self.controls = ControlValues::default();
+        self.controls_synced = false;
         self.video = None;
         self.camera_stats = None;
         self.link = LinkStats::default();
@@ -173,6 +196,45 @@ impl PairCamApp {
         if let Some(address) = address {
             self.engine.connect(address);
         }
+    }
+
+    fn rebuild_stream_controls(
+        &mut self,
+        capabilities: Capabilities,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let preferences = self.engine.preferences();
+        self.stream_controls =
+            StreamControls::new(capabilities, &preferences, &self.controls, window, cx);
+    }
+
+    /// Applies what the stream selects now say, then rebuilds them because the choices for
+    /// one depend on another (a camera has its own sizes; a size has its own frame rates).
+    pub(crate) fn apply_stream_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(controls) = self.stream_controls.as_ref() else {
+            return;
+        };
+        let Some(preferences) = controls.preferences(cx) else {
+            return;
+        };
+        let capabilities = controls.capabilities().clone();
+        self.engine.set_preferences(preferences, &capabilities);
+        self.rebuild_stream_controls(capabilities, window, cx);
+        cx.notify();
+    }
+
+    /// Sends a camera control change and shows it right away.
+    pub(crate) fn set_control(&mut self, change: ControlValues, cx: &mut Context<Self>) {
+        self.engine.control(change.clone());
+        let current = &mut self.controls;
+        current.zoom = change.zoom.or(current.zoom);
+        current.focus = change.focus.or(current.focus);
+        current.exposure_bias = change.exposure_bias.or(current.exposure_bias);
+        current.white_balance = change.white_balance.or(current.white_balance);
+        current.torch = change.torch.or(current.torch);
+        current.stabilization = change.stabilization.or(current.stabilization);
+        cx.notify();
     }
 
     fn toggle_theme(&mut self, cx: &mut Context<Self>) {
@@ -592,15 +654,14 @@ impl PairCamApp {
             Thermal::Unknown => text!("thermal.unknown"),
         });
 
-        div()
+        let sections = div()
+            .id("inspector-sections")
             .v_flex()
-            .flex_none()
-            .w(px(280.))
-            .h_full()
+            .flex_1()
+            .min_h_0()
             .gap_5()
             .p_4()
-            .border_l_1()
-            .border_color(cx.theme().border)
+            .overflow_y_scroll()
             .child(
                 div()
                     .v_flex()
@@ -635,12 +696,32 @@ impl PairCamApp {
                         ))
                     }),
             )
-            .child(div().flex_1())
+            .children(
+                self.stream_controls
+                    .as_ref()
+                    .map(|controls| controls.render(&self.controls, cx)),
+            );
+
+        // The sections scroll; the way out stays in reach at the bottom.
+        div()
+            .v_flex()
+            .flex_none()
+            .w(px(280.))
+            .h_full()
+            .border_l_1()
+            .border_color(cx.theme().border)
+            .child(sections)
             .child(
-                Button::new("disconnect")
-                    .label(text!("inspector.disconnect"))
-                    .w_full()
-                    .on_click(cx.listener(|this, _, _, _| this.engine.disconnect())),
+                div()
+                    .p_4()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Button::new("disconnect")
+                            .label(text!("inspector.disconnect"))
+                            .w_full()
+                            .on_click(cx.listener(|this, _, _, _| this.engine.disconnect())),
+                    ),
             )
     }
 }
@@ -654,7 +735,7 @@ impl Render for PairCamApp {
             Phase::Pairing { camera_name, code } => self.pairing_screen(camera_name, code, cx),
             Phase::Failed(failure) => self.failed_screen(failure, cx),
             Phase::Connected { camera_name, .. } => div()
-                .h_flex()
+                .flex()
                 .size_full()
                 .child(self.live_screen(cx))
                 .child(self.inspector(camera_name, cx))
