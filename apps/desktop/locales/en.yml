@@ -142,6 +142,7 @@ settings:
   quit: Quit PairCam
 
 camera:
+  already_running: another PairCam is already running
   not_installed: The PairCam camera is not installed yet, so other apps cannot see your phone.
   unsupported: Other apps cannot see your phone on this version of Windows. The PairCam camera needs Windows 11.
   failed: "Windows could not start the PairCam camera: %{detail}"
@@ -149,3 +150,7 @@ camera:
   status_ready: Ready
   status_in_use: In use by an app
   status_unavailable: Not available
+
+tray:
+  open: Open PairCam
+  quit: Quit PairCam

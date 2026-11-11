@@ -1,8 +1,10 @@
 // Release builds are a windowed app; debug builds keep the console for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::cell::Cell;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::{AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -15,6 +17,7 @@ mod controls;
 mod gallery;
 mod picture;
 mod settings;
+mod tray;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -79,6 +82,11 @@ fn main() {
         .init();
 
     let options = options();
+    // A second copy only brings the first one's window forward. The gallery and runs with their
+    // own data folder are development tools and may run beside the real app.
+    if !options.gallery && options.data_directory.is_none() && !tray::claim_single_instance() {
+        return;
+    }
     let data_directory = options
         .data_directory
         .clone()
@@ -131,12 +139,23 @@ fn main() {
                 return;
             }
 
+            let window_handle = Rc::new(Cell::new(None::<isize>));
+            let window_handle_slot = window_handle.clone();
+            let tray_ready = Rc::new(Cell::new(false));
+            let tray_ready_flag = tray_ready.clone();
             gpui_kit::open_window(window_options, cx, |window, cx| {
                 window.set_window_title("PairCam");
-                // The close button only minimizes: PairCam has to keep running for other apps to
-                // see the camera. Quitting is in the settings sheet.
-                window.on_window_should_close(cx, |window, _| {
-                    window.minimize_window();
+                // Closing the window keeps PairCam running in the notification area, because
+                // other apps only see the camera while it runs. Without the icon there would
+                // be no way back, so the window is minimized instead.
+                let handle = tray::native_handle(window);
+                window_handle.set(handle);
+                let tray_ready = tray_ready.clone();
+                window.on_window_should_close(cx, move |window, _| {
+                    match handle {
+                        Some(handle) if tray_ready.get() => tray::hide(handle),
+                        _ => window.minimize_window(),
+                    }
                     false
                 });
                 if options.light {
@@ -156,5 +175,28 @@ fn main() {
                 })
             })
             .expect("failed to open the main window");
+
+            // The icon next to the clock: click to open, right-click for the menu.
+            let (sender, actions) = async_channel::unbounded();
+            let icon = tray::Tray::new(&text!("tray.open"), &text!("tray.quit"), sender);
+            tray_ready_flag.set(icon.is_some());
+            let handle = window_handle_slot.get();
+            cx.spawn(async move |cx| {
+                let _icon = icon;
+                while let Ok(action) = actions.recv().await {
+                    match action {
+                        tray::TrayAction::Open => {
+                            if let Some(handle) = handle {
+                                tray::show(handle);
+                            }
+                        }
+                        tray::TrayAction::Quit => {
+                            cx.update(|cx| cx.quit());
+                            break;
+                        }
+                    }
+                }
+            })
+            .detach();
         });
 }

@@ -247,8 +247,15 @@ impl PairCamApp {
             address,
             data_directory,
             preferences,
+            // A copy that could not start the camera feed (another PairCam already serves it)
+            // must leave the camera alone: registering it again would take it away from the
+            // copy that is feeding it.
+            camera_status: if camera.is_some() {
+                CameraStatus::activate()
+            } else {
+                CameraStatus::Failed(text!("camera.already_running").to_string())
+            },
             _camera: camera,
-            camera_status: CameraStatus::activate(),
             camera_in_use: false,
             installing_camera: false,
             _subscriptions: subscriptions,

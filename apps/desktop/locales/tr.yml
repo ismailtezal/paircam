@@ -142,6 +142,7 @@ settings:
   quit: PairCam’den çık
 
 camera:
+  already_running: başka bir PairCam zaten çalışıyor
   not_installed: PairCam kamerası henüz kurulmadı; diğer uygulamalar telefonunu göremez.
   unsupported: Bu Windows sürümünde diğer uygulamalar telefonunu göremez. PairCam kamerası Windows 11 gerektirir.
   failed: "Windows, PairCam kamerasını başlatamadı: %{detail}"
@@ -149,3 +150,7 @@ camera:
   status_ready: Hazır
   status_in_use: Bir uygulama kullanıyor
   status_unavailable: Kullanılamıyor
+
+tray:
+  open: PairCam’i aç
+  quit: PairCam’den çık
