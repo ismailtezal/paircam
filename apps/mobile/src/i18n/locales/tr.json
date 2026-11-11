@@ -1,0 +1,146 @@
+{
+  "common": {
+    "appName": "PairCam",
+    "openSettings": "Ayarları Aç",
+    "done": "Bitti",
+    "cancel": "Vazgeç"
+  },
+  "setup": {
+    "title": "Bu iPhone'u web kameranız yapın",
+    "subtitle": "PairCam'in iki izne ihtiyacı var. Görüntü doğrudan bilgisayarınıza gider, başka hiçbir yere gitmez.",
+    "step": "Adım {{current}} / {{total}}",
+    "allowed": "İzin verildi",
+    "camera": {
+      "title": "Kamera",
+      "body": "Bilgisayarınızın web kamerası olarak kullandığı görüntüyü çekmek için.",
+      "action": "Kameraya İzin Ver"
+    },
+    "localNetwork": {
+      "title": "Yerel Ağ",
+      "body": "Bilgisayarınızdaki PairCam'in bu iPhone'u Wi-Fi ağınızda bulabilmesi için.",
+      "action": "Yerel Ağa İzin Ver"
+    }
+  },
+  "permission": {
+    "cameraDenied": {
+      "title": "Kamera erişimi kapalı",
+      "body": "PairCam kamera olmadan görüntü gösteremez ve gönderemez. Ayarlar'da PairCam için Kamera'yı açın."
+    },
+    "cameraRestricted": {
+      "title": "Kamera kısıtlanmış",
+      "body": "Bu iPhone uygulamaların kamerayı kullanmasına izin vermiyor. Ekran Süresi'ni veya aygıt yönetimi ayarlarınızı kontrol edin."
+    },
+    "localNetworkDenied": {
+      "title": "Yerel Ağ erişimi kapalı",
+      "body": "Bilgisayarınız bu iPhone'u bulamıyor. Ayarlar'da PairCam için Yerel Ağ'ı açın."
+    }
+  },
+  "ready": {
+    "status": "Bilgisayarınız bekleniyor",
+    "starting": "Başlatılıyor",
+    "hint": "Bilgisayarınızda PairCam'i açın. Bu iPhone orada kendiliğinden görünür."
+  },
+  "notice": {
+    "noWifi": {
+      "title": "Wi-Fi yok",
+      "body": "Bu iPhone'u bilgisayarınızla aynı Wi-Fi ağına bağlayın."
+    },
+    "cameraInterrupted": {
+      "title": "Kamera duraklatıldı",
+      "body": "Kamerayı başka bir şey kullanıyor. Kamera boşalınca görüntü devam eder."
+    },
+    "connectionLost": {
+      "title": "Bağlantı koptu",
+      "body": "{{host}} ile bağlantı koptu. Geri geldiğinde kendiliğinden yeniden bağlanır."
+    },
+    "hostEnded": {
+      "title": "Bağlantı kesildi",
+      "body": "{{host}} oturumu sonlandırdı."
+    },
+    "pairingTimedOut": {
+      "title": "Eşleştirme zaman aşımına uğradı",
+      "body": "{{host}} cihazından gelen istek yanıtlanmadı. Eşleştirmeyi bilgisayarınızdan yeniden başlatın."
+    }
+  },
+  "pairing": {
+    "title": "{{host}} ile eşleştirilsin mi?",
+    "body": "Yalnızca bu kod bilgisayarınızdaki kodla aynıysa izin verin.",
+    "codeLabel": "Eşleştirme kodu {{code}}",
+    "allow": "İzin Ver",
+    "decline": "Reddet"
+  },
+  "connected": {
+    "status": "Bağlı",
+    "title": "{{host}} cihazına bağlı",
+    "hint": "Kamerayı bilgisayarınızdan açtığınızda görüntü başlar.",
+    "disconnect": "Bağlantıyı Kes"
+  },
+  "streaming": {
+    "status": "Canlı",
+    "title": "{{host}} cihazına yayınlanıyor",
+    "stop": "Durdur",
+    "dim": "Ekranı Karart",
+    "dimmed": "Yayın devam ediyor. Uyandırmak için dokunun.",
+    "wake": "Ekranı uyandır",
+    "resolution": "Çözünürlük",
+    "frameRate": "Kare hızı",
+    "bitrate": "Bit hızı",
+    "temperature": "Sıcaklık",
+    "battery": "Pil",
+    "resolutionValue": "{{width}} × {{height}}",
+    "frameRateValue": "{{value}} fps",
+    "bitrateValue": "{{value}} Mbps",
+    "batteryValue": "%{{value}}",
+    "batteryCharging": "%{{value}}, şarj oluyor",
+    "pending": "–",
+    "thermal": {
+      "nominal": "Normal",
+      "fair": "Ilık",
+      "serious": "Sıcak",
+      "critical": "Çok sıcak",
+      "unknown": "Bilinmiyor"
+    }
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "pairedComputers": {
+      "title": "Eşleştirilmiş bilgisayarlar",
+      "empty": "Henüz eşleştirilmiş bilgisayar yok. Eşleştirmeyi bilgisayarınızdaki PairCam'den başlatın.",
+      "footer": "Eşleştirilmiş bilgisayarlar kod gerekmeden kendiliğinden yeniden bağlanır.",
+      "pairedOn": "{{date}} tarihinde eşleştirildi",
+      "forget": "Unut",
+      "forgetLabel": "{{host}} cihazını unut",
+      "forgetTitle": "{{host}} unutulsun mu?",
+      "forgetBody": "Bu bilgisayarın bu iPhone'u kullanabilmesi için yeniden eşleştirilmesi gerekir."
+    },
+    "preferences": {
+      "title": "Tercihler"
+    },
+    "language": {
+      "title": "Dil",
+      "system": "Sistem dili",
+      "footer": "Burada bir dil seçmediğiniz sürece PairCam, iPhone'unuzun dilini kullanır."
+    },
+    "appearance": {
+      "title": "Görünüm",
+      "system": "Sistemle aynı",
+      "dark": "Koyu",
+      "light": "Açık"
+    },
+    "about": {
+      "title": "Hakkında",
+      "version": "Sürüm",
+      "licences": "Açık kaynak lisansları",
+      "footer": "PairCam ücretsizdir ve MIT lisansı altında açık kaynaklıdır."
+    },
+    "licences": {
+      "title": "Açık kaynak lisansları",
+      "intro": "PairCam bu açık kaynak paketlerle geliştirildi.",
+      "unknown": "Bilinmeyen lisans"
+    }
+  },
+  "languages": {
+    "en": "English",
+    "tr": "Türkçe"
+  }
+}

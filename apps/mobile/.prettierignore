@@ -1,0 +1,7 @@
+node_modules
+dist
+ios
+.expo
+package-lock.json
+src/theme/tokens.ts
+src/generated

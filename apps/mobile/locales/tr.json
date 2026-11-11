@@ -1,0 +1,5 @@
+{
+  "CFBundleDisplayName": "PairCam",
+  "NSCameraUsageDescription": "PairCam, canlı görüntüyü bilgisayarınıza göndermek için kamerayı kullanır; görüntü bilgisayarda web kamerası olarak görünür.",
+  "NSLocalNetworkUsageDescription": "PairCam, bilgisayarınızdaki PairCam uygulamasının bu iPhone'u bulup görüntüsünü alabilmesi için yerel ağınızı kullanır."
+}

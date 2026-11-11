@@ -1,0 +1,146 @@
+{
+  "common": {
+    "appName": "PairCam",
+    "openSettings": "Open Settings",
+    "done": "Done",
+    "cancel": "Cancel"
+  },
+  "setup": {
+    "title": "Use this iPhone as your webcam",
+    "subtitle": "PairCam needs two permissions. Video goes straight to your computer and nowhere else.",
+    "step": "Step {{current}} of {{total}}",
+    "allowed": "Allowed",
+    "camera": {
+      "title": "Camera",
+      "body": "To capture the video your computer uses as a webcam.",
+      "action": "Allow Camera"
+    },
+    "localNetwork": {
+      "title": "Local Network",
+      "body": "So PairCam on your computer can find this iPhone on your Wi-Fi.",
+      "action": "Allow Local Network"
+    }
+  },
+  "permission": {
+    "cameraDenied": {
+      "title": "Camera access is off",
+      "body": "PairCam can't show or send video without the camera. Turn on Camera for PairCam in Settings."
+    },
+    "cameraRestricted": {
+      "title": "Camera is restricted",
+      "body": "This iPhone doesn't let apps use the camera. Check Screen Time or your device management settings."
+    },
+    "localNetworkDenied": {
+      "title": "Local Network access is off",
+      "body": "Your computer can't find this iPhone. Turn on Local Network for PairCam in Settings."
+    }
+  },
+  "ready": {
+    "status": "Waiting for your computer",
+    "starting": "Starting",
+    "hint": "Open PairCam on your PC. This iPhone appears there on its own."
+  },
+  "notice": {
+    "noWifi": {
+      "title": "No Wi-Fi",
+      "body": "Connect this iPhone to the same Wi-Fi network as your computer."
+    },
+    "cameraInterrupted": {
+      "title": "Camera paused",
+      "body": "Something else is using the camera. Video resumes when it's free."
+    },
+    "connectionLost": {
+      "title": "Connection lost",
+      "body": "Lost the connection to {{host}}. It reconnects on its own when it's back."
+    },
+    "hostEnded": {
+      "title": "Disconnected",
+      "body": "{{host}} ended the session."
+    },
+    "pairingTimedOut": {
+      "title": "Pairing timed out",
+      "body": "The request from {{host}} wasn't answered. Start pairing again from your computer."
+    }
+  },
+  "pairing": {
+    "title": "Pair with {{host}}?",
+    "body": "Allow only if this code matches the one on your computer.",
+    "codeLabel": "Pairing code {{code}}",
+    "allow": "Allow",
+    "decline": "Decline"
+  },
+  "connected": {
+    "status": "Connected",
+    "title": "Connected to {{host}}",
+    "hint": "Video starts when you turn the camera on from your computer.",
+    "disconnect": "Disconnect"
+  },
+  "streaming": {
+    "status": "Live",
+    "title": "Streaming to {{host}}",
+    "stop": "Stop",
+    "dim": "Dim Screen",
+    "dimmed": "Streaming continues. Tap to wake.",
+    "wake": "Wake screen",
+    "resolution": "Resolution",
+    "frameRate": "Frame rate",
+    "bitrate": "Bitrate",
+    "temperature": "Temperature",
+    "battery": "Battery",
+    "resolutionValue": "{{width}} × {{height}}",
+    "frameRateValue": "{{value}} fps",
+    "bitrateValue": "{{value}} Mbps",
+    "batteryValue": "{{value}}%",
+    "batteryCharging": "{{value}}%, charging",
+    "pending": "–",
+    "thermal": {
+      "nominal": "Normal",
+      "fair": "Warm",
+      "serious": "Hot",
+      "critical": "Too hot",
+      "unknown": "Unknown"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "pairedComputers": {
+      "title": "Paired computers",
+      "empty": "No paired computers yet. Start pairing from PairCam on your PC.",
+      "footer": "Paired computers reconnect on their own, without a code.",
+      "pairedOn": "Paired {{date}}",
+      "forget": "Forget",
+      "forgetLabel": "Forget {{host}}",
+      "forgetTitle": "Forget {{host}}?",
+      "forgetBody": "This computer will have to pair again before it can use this iPhone."
+    },
+    "preferences": {
+      "title": "Preferences"
+    },
+    "language": {
+      "title": "Language",
+      "system": "System language",
+      "footer": "PairCam follows your iPhone's language unless you choose one here."
+    },
+    "appearance": {
+      "title": "Appearance",
+      "system": "Match system",
+      "dark": "Dark",
+      "light": "Light"
+    },
+    "about": {
+      "title": "About",
+      "version": "Version",
+      "licences": "Open-source licences",
+      "footer": "PairCam is free and open source under the MIT licence."
+    },
+    "licences": {
+      "title": "Open-source licences",
+      "intro": "PairCam is built with these open-source packages.",
+      "unknown": "Unknown licence"
+    }
+  },
+  "languages": {
+    "en": "English",
+    "tr": "Türkçe"
+  }
+}

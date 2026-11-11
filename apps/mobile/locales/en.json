@@ -1,0 +1,5 @@
+{
+  "CFBundleDisplayName": "PairCam",
+  "NSCameraUsageDescription": "PairCam uses the camera to send live video to your computer, where it appears as a webcam.",
+  "NSLocalNetworkUsageDescription": "PairCam uses your local network so the PairCam app on your computer can find this iPhone and receive its video."
+}

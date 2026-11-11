@@ -1,0 +1,7 @@
+/*
+ * No values live here. Colours, spacing, radii and type sizes come from the generated design
+ * tokens through tailwind.config.ts.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
