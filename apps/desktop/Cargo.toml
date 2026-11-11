@@ -25,5 +25,9 @@ simple_logger = { version = "5", default-features = false, features = ["stderr"]
 smallvec = "1"
 sys-locale = "0.3"
 
+[build-dependencies]
+# The Windows icon and version resource (build.rs).
+embed-resource = "3"
+
 [lints]
 workspace = true
