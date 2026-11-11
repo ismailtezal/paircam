@@ -1,7 +1,9 @@
 //! The main window: one view that follows the engine's state and shows the matching screen.
 
+use std::cell::Cell;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
@@ -13,19 +15,20 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
-    ObjectFit, ParentElement as _, Render, RenderImage, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription, Window, black,
-    div, img, px,
+    AnyElement, AppContext as _, Bounds, Context, Entity, FontWeight, InteractiveElement as _,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _,
+    Pixels, Point, Render, RenderImage, ScrollEvent, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledImage as _, Subscription, Window, black, canvas, div, img, px,
 };
 use image::{Frame, RgbaImage};
+use paircam_engine::picture::{OUTPUT_HEIGHT, OUTPUT_WIDTH};
 use paircam_engine::protocol::{
-    Capabilities, ControlValues, DEFAULT_PORT, LogEntry, Stats, Thermal,
+    Capabilities, ControlValues, DEFAULT_PORT, Gesture, GesturePhase, LogEntry, Stats, Thermal,
 };
 use paircam_engine::vcam::VirtualCamera;
 use paircam_engine::{
     Channels, DiscoveredCamera, Engine, Event, Failure, LinkStats, PairedCamera, Phase,
-    PreviewFrame, VideoInfo,
+    PictureSettings, PreviewFrame, VideoInfo,
 };
 use paircam_ui::tokens::{font, radius};
 use paircam_ui::{
@@ -35,8 +38,13 @@ use smallvec::SmallVec;
 
 use crate::camera::{self, CameraStatus};
 use crate::controls::StreamControls;
+use crate::picture::{GestureNotice, PictureControls};
 use crate::settings::{self, Appearance, Preferences, SettingsView};
 use crate::text;
+
+/// How fast the scroll wheel zooms the picture: the zoom factor per pixel scrolled is
+/// `exp(WHEEL_ZOOM_RATE)`, so a typical notch of 120 px zooms by about a third.
+const WHEEL_ZOOM_RATE: f32 = 0.0025;
 
 /// What the app is started with.
 pub struct Startup {
@@ -91,6 +99,15 @@ pub struct PairCamApp {
     camera_in_use: bool,
     /// Whether the camera install script is running.
     installing_camera: bool,
+    /// How the picture is adjusted, as the engine last reported it.
+    picture: PictureSettings,
+    picture_controls: PictureControls,
+    gesture_notice: Option<GestureNotice>,
+    next_notice_id: u64,
+    /// Where the stage was last laid out, for turning drags into pans.
+    stage_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// Where the pointer was at the last step of a drag on the preview.
+    pan_from: Option<Point<Pixels>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -174,14 +191,37 @@ impl PairCamApp {
         })
         .detach();
 
+        // Follow the picture settings, whoever changes them.
+        let picture_changes = engine.watch_picture();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(picture) = picture_changes.recv().await {
+                let updated = this.update_in(cx, |this, window, cx| {
+                    this.picture = picture;
+                    this.picture_controls.sync(&picture, window, cx);
+                    cx.notify();
+                });
+                if updated.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         if let Some(address) = connect_to {
             engine.connect(address);
         }
         if show_settings {
             cx.defer_in(window, |this, window, cx| this.open_settings(window, cx));
         }
+        let picture = engine.picture();
 
         Self {
+            picture,
+            picture_controls: PictureControls::new(&picture, cx),
+            gesture_notice: None,
+            next_notice_id: 0,
+            stage_bounds: Rc::new(Cell::new(Bounds::default())),
+            pan_from: None,
             paired: engine.paired_cameras(),
             discovered: Vec::new(),
             auto_connect: true,
@@ -316,8 +356,124 @@ impl PairCamApp {
                 log::info!("phone [{}] {}", entry.tag, entry.message);
                 self.save_phone_log(&entry);
             }
+            Event::Gesture(gesture) => self.show_gesture(gesture, cx),
         }
         cx.notify();
+    }
+
+    /// Names a gesture the phone acted on, briefly, over the picture. A continuous gesture
+    /// stays named while the hands move.
+    fn show_gesture(&mut self, gesture: Gesture, cx: &mut Context<Self>) {
+        match gesture.phase {
+            GesturePhase::Recognised | GesturePhase::Began => {
+                self.next_notice_id += 1;
+                let id = self.next_notice_id;
+                self.gesture_notice = Some(GestureNotice {
+                    kind: gesture.kind,
+                    visible: true,
+                    id,
+                });
+                if gesture.phase == GesturePhase::Recognised {
+                    self.hide_gesture_after(id, GestureNotice::HOLD, cx);
+                }
+            }
+            GesturePhase::Ended => {
+                if let Some(notice) = self
+                    .gesture_notice
+                    .filter(|notice| notice.kind == gesture.kind)
+                {
+                    self.hide_gesture_after(notice.id, GestureNotice::LINGER, cx);
+                }
+            }
+            GesturePhase::Unknown => {}
+        }
+    }
+
+    fn hide_gesture_after(&self, id: u64, delay: std::time::Duration, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(notice) = this
+                    .gesture_notice
+                    .as_mut()
+                    .filter(|notice| notice.id == id)
+                {
+                    notice.visible = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Changes the picture adjustments in the engine, which applies, saves and reports them.
+    pub(crate) fn change_picture(
+        &mut self,
+        change: impl FnOnce(&mut PictureSettings),
+        cx: &mut Context<Self>,
+    ) {
+        let mut picture = self.engine.picture();
+        change(&mut picture);
+        self.engine.set_picture(picture);
+        self.picture = self.engine.picture();
+        cx.notify();
+    }
+
+    /// Whether face tracking frames the picture right now, which leaves zoom and pan to it.
+    fn tracking(&self) -> bool {
+        self.controls.face_tracking == Some(true)
+    }
+
+    /// The preview on the stage: the output's 16:9 frame, fitted inside the stage.
+    fn shown_picture_size(&self) -> (f32, f32) {
+        let bounds = self.stage_bounds.get();
+        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        let aspect = OUTPUT_WIDTH as f32 / OUTPUT_HEIGHT as f32;
+        let shown_width = width.min(height * aspect);
+        (shown_width, shown_width / aspect)
+    }
+
+    fn start_pan(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        if self.picture.is_zoomed() && !self.tracking() {
+            self.pan_from = Some(event.position);
+            cx.notify();
+        }
+    }
+
+    fn pan(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(from) = self.pan_from else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.end_pan(cx);
+            return;
+        }
+        let (width, height) = self.shown_picture_size();
+        if width < 1.0 || height < 1.0 {
+            return;
+        }
+        let delta = event.position - from;
+        self.pan_from = Some(event.position);
+        self.engine
+            .pan_picture(f32::from(delta.x) / width, f32::from(delta.y) / height);
+    }
+
+    fn end_pan(&mut self, cx: &mut Context<Self>) {
+        if self.pan_from.take().is_some() {
+            self.engine.end_pan();
+            cx.notify();
+        }
+    }
+
+    fn wheel_zoom(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
+        if self.tracking() {
+            return;
+        }
+        let scrolled = f32::from(event.delta.pixel_delta(px(font::size::LG)).y);
+        if scrolled != 0.0 {
+            let factor = (scrolled * WHEEL_ZOOM_RATE).exp();
+            self.change_picture(|picture| picture.zoom *= factor, cx);
+        }
     }
 
     /// Appends a log line from the phone to `phone.log` in the app data folder, so problems
@@ -348,6 +504,10 @@ impl PairCamApp {
         self.video = None;
         self.camera_stats = None;
         self.link = LinkStats::default();
+        self.gesture_notice = None;
+        if self.pan_from.take().is_some() {
+            self.engine.end_pan();
+        }
         for image in [self.preview.take(), self.retired_preview.take()]
             .into_iter()
             .flatten()
@@ -446,6 +606,8 @@ impl PairCamApp {
         current.white_balance = change.white_balance.or(current.white_balance);
         current.torch = change.torch.or(current.torch);
         current.stabilization = change.stabilization.or(current.stabilization);
+        current.face_tracking = change.face_tracking.or(current.face_tracking);
+        current.gestures = change.gestures.or(current.gestures);
         cx.notify();
     }
 
@@ -839,7 +1001,7 @@ impl PairCamApp {
             .into_any_element()
     }
 
-    fn live_screen(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn live_screen(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let picture = match &self.preview {
             // Pinned to the stage so the picture is fitted inside it whatever its shape. Left in
             // the normal flow, a tall picture takes its height from its width and gets cropped.
@@ -865,12 +1027,18 @@ impl PairCamApp {
                 .into_any_element(),
         };
 
+        // The preview can be dragged to pan while zoomed in, and zoomed with the wheel.
+        let pannable = self.preview.is_some() && self.picture.is_zoomed() && !self.tracking();
+        let panning = self.pan_from.is_some();
+        let stage_bounds = self.stage_bounds.clone();
+
         div()
             .flex_1()
             .min_w_0()
             .p_4()
             .child(
                 div()
+                    .id("stage")
                     .relative()
                     .size_full()
                     .rounded(px(radius::LG))
@@ -878,7 +1046,39 @@ impl PairCamApp {
                     .border_1()
                     .border_color(cx.theme().border)
                     .bg(black())
+                    .child(
+                        canvas(
+                            move |bounds, _, _| stage_bounds.set(bounds),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
                     .child(picture)
+                    .when(pannable && !panning, |stage| stage.cursor_grab())
+                    .when(panning, |stage| stage.cursor_grabbing())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.start_pan(event, cx);
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                        this.pan(event, cx);
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.end_pan(cx)),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.end_pan(cx)),
+                    )
+                    .when(self.preview.is_some(), |stage| {
+                        stage.on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+                            this.wheel_zoom(event, cx)
+                        }))
+                    })
                     .when_some(self.video.as_ref(), |stage, video| {
                         stage.child(
                             div()
@@ -887,7 +1087,12 @@ impl PairCamApp {
                                 .bottom_3()
                                 .child(self.stats_bar(video, cx)),
                         )
-                    }),
+                    })
+                    .children(GestureNotice::render(
+                        self.gesture_notice.as_ref(),
+                        window,
+                        cx,
+                    )),
             )
             .into_any_element()
     }
@@ -1017,7 +1222,19 @@ impl PairCamApp {
                 self.stream_controls
                     .as_ref()
                     .map(|controls| controls.render(&self.controls, cx)),
-            );
+            )
+            .child(
+                self.picture_controls
+                    .render_picture(&self.picture, self.tracking(), cx),
+            )
+            .children(self.stream_controls.as_ref().and_then(|controls| {
+                self.picture_controls.render_tracking(
+                    &controls.capabilities().controls,
+                    &self.controls,
+                    &self.picture,
+                    cx,
+                )
+            }));
 
         // The sections scroll; the way out stays in reach at the bottom.
         div()
@@ -1044,7 +1261,7 @@ impl PairCamApp {
 }
 
 impl Render for PairCamApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let phase = self.phase.clone();
         let body = match &phase {
             Phase::Idle => self.connect_screen(cx),
@@ -1054,7 +1271,7 @@ impl Render for PairCamApp {
             Phase::Connected { camera_name, .. } => div()
                 .flex()
                 .size_full()
-                .child(self.live_screen(cx))
+                .child(self.live_screen(window, cx))
                 .child(self.inspector(camera_name, cx))
                 .into_any_element(),
         };

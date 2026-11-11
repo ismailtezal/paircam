@@ -13,14 +13,18 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use paircam_engine::{Engine, Event, FrameSink, Nv12Frame, PreviewFrame};
+use paircam_engine::{CameraFrame, Engine, Event, FrameSink, PreviewFrame};
 
 struct CountingSink {
     frames: Arc<AtomicU32>,
 }
 
 impl FrameSink for CountingSink {
-    fn frame(&mut self, _: &Nv12Frame<'_>) {
+    fn wants_frames(&self) -> bool {
+        true
+    }
+
+    fn frame(&mut self, _: &CameraFrame<'_>) {
         self.frames.fetch_add(1, Ordering::Relaxed);
     }
 

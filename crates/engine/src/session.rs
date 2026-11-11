@@ -13,9 +13,10 @@ use paircam_protocol::{
     random_bytes, read_record, write_record,
 };
 
-use crate::decoder::{Decoder, Nv12Frame, Scaler};
+use crate::decoder::Decoder;
+use crate::picture;
 use crate::store::StreamPreferences;
-use crate::{Event, Failure, Inner, LinkStats, Phase, PreviewFrame, VideoInfo, lock};
+use crate::{Event, Failure, Inner, LinkStats, Phase, VideoInfo, lock};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -24,9 +25,6 @@ const PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
 /// The phone answers a ping every second, so this much silence means it is gone.
 const SILENCE_TIMEOUT: Duration = Duration::from_secs(5);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
-/// The preview follows the stream, up to 60 pictures a second. The virtual camera gets every
-/// picture regardless.
-const PREVIEW_INTERVAL: Duration = Duration::from_millis(15);
 const KEYFRAME_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 
 fn now_us() -> u64 {
@@ -147,8 +145,10 @@ fn run(inner: &Arc<Inner>, shared: &Arc<Shared>, address: SocketAddr) {
     };
 
     *lock(&shared.writer) = None;
-    if let Some(sink) = lock(&inner.sink).as_mut() {
-        sink.stopped();
+    // Only the current session may reset the picture: a replaced one ends while its
+    // successor is already streaming.
+    if inner.is_current(shared.id) || lock(&inner.session).is_none() {
+        inner.pipeline.stop();
     }
 
     // A session the user replaced or closed has already been reported.
@@ -315,7 +315,23 @@ fn serve(
             }
             Message::VideoConfig(config) => video.configure(&config, inner),
             Message::VideoFrame(frame) => video.frame(&frame, inner, shared),
-            Message::ControlState(state) => inner.emit(Event::ControlState(state)),
+            Message::ControlState(state) => {
+                if let Some(enabled) = state.face_tracking {
+                    inner.pipeline.set_tracking(enabled);
+                }
+                inner.emit(Event::ControlState(state));
+            }
+            Message::Subject(subject) => {
+                inner
+                    .pipeline
+                    .set_face(subject.face.map(|face| picture::Rect {
+                        x: face.x,
+                        y: face.y,
+                        width: face.width,
+                        height: face.height,
+                    }));
+            }
+            Message::Gesture(gesture) => inner.emit(Event::Gesture(gesture)),
             Message::Stats(stats) => inner.emit(Event::CameraStats(stats)),
             Message::Log(entry) => inner.emit(Event::CameraLog(entry)),
             Message::Ping(timestamp) => shared.send(&Message::Pong(timestamp)),
@@ -372,6 +388,7 @@ fn spawn_ticker(
                         decode_us as f32 / frames as f32 / 1000.0
                     },
                     round_trip_ms: (round_trip_us > 0).then(|| round_trip_us as f32 / 1000.0),
+                    transform_ms: inner.pipeline.take_transform_ms(),
                 }));
             }
         })
@@ -381,25 +398,21 @@ fn spawn_ticker(
 /// Decoding state for the stream in a session.
 struct Video {
     decoder: Option<Decoder>,
-    scaler: Scaler,
     counters: Arc<Counters>,
     info: Option<VideoInfo>,
     /// After a decode error, frames are skipped until the next keyframe.
     waiting_for_keyframe: bool,
     last_keyframe_request: Option<Instant>,
-    last_preview: Option<Instant>,
 }
 
 impl Video {
     fn new(counters: Arc<Counters>) -> Self {
         Self {
             decoder: None,
-            scaler: Scaler::new(),
             counters,
             info: None,
             waiting_for_keyframe: false,
             last_keyframe_request: None,
-            last_preview: None,
         }
     }
 
@@ -460,18 +473,8 @@ impl Video {
             .decode_us
             .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
 
-        if let Some(sink) = lock(&inner.sink).as_mut() {
-            sink.frame(&picture);
-        }
-
-        let preview_due = self
-            .last_preview
-            .is_none_or(|last| last.elapsed() >= PREVIEW_INTERVAL);
-        // Skip the work while the window still holds a picture it has not shown.
-        if preview_due && !inner.preview.is_full() {
-            self.last_preview = Some(Instant::now());
-            send_preview(&mut self.scaler, &picture, inner);
-        }
+        // A copy, and the picture thread does the rest.
+        inner.pipeline.submit(&picture);
 
         // Report what was actually decoded. The GPU can refuse a stream on the first picture,
         // which flips decoding to software, and the pictures are the authority on their size.
@@ -492,31 +495,6 @@ impl Video {
             inner.emit(Event::Video(info.clone()));
         }
     }
-}
-
-fn send_preview(scaler: &mut Scaler, picture: &Nv12Frame<'_>, inner: &Inner) {
-    let max_width = inner.preview_max_width.load(Ordering::Relaxed);
-    let (width, height) = fit_width(picture.width(), picture.height(), max_width);
-    let mut bgra = Vec::new();
-    match scaler.nv12_to_bgra(picture, width, height, &mut bgra) {
-        Ok(()) => {
-            let _ = inner.preview.force_send(PreviewFrame {
-                width,
-                height,
-                bgra,
-            });
-        }
-        Err(error) => log::warn!("cannot scale a preview picture: {error}"),
-    }
-}
-
-/// Scales a size down to at most `max_width`, keeping the shape and even dimensions.
-fn fit_width(width: u32, height: u32, max_width: u32) -> (u32, u32) {
-    if width <= max_width {
-        return (width, height);
-    }
-    let scaled_height = (u64::from(height) * u64::from(max_width) / u64::from(width)) as u32;
-    (max_width & !1, scaled_height.max(2) & !1)
 }
 
 /// Picks what to ask the phone for: the preferred camera, size, rate and codec where the phone
@@ -656,13 +634,5 @@ mod tests {
         assert!(
             choose_configuration(&Capabilities::default(), &StreamPreferences::default()).is_none()
         );
-    }
-
-    #[test]
-    fn preview_sizes_keep_their_shape() {
-        assert_eq!(fit_width(1920, 1080, 1280), (1280, 720));
-        assert_eq!(fit_width(1280, 720, 1280), (1280, 720));
-        assert_eq!(fit_width(3840, 2160, 1280), (1280, 720));
-        assert_eq!(fit_width(1080, 1920, 640), (640, 1136));
     }
 }

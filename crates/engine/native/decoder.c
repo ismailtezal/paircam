@@ -2,7 +2,8 @@
 //
 // It decodes H.264 or HEVC access units (length-prefixed NAL units, as the phone's encoder emits
 // them) into NV12 pictures in system memory, on the GPU through D3D11VA when available, and
-// converts NV12 to BGRA at any size for the preview.
+// converts NV12 to BGRA at any size for the preview. pc_transform_nv12 crops, scales, turns,
+// mirrors and flips NV12 pictures for the camera feed and the preview.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -230,6 +231,10 @@ void pc_error_string(int code, char *error, int error_len) {
 
 typedef struct PcScaler {
     struct SwsContext *context;
+    // Working memory for pc_transform_nv12: a picture before it is turned, and the index maps
+    // that turn it.
+    uint8_t *scratch;
+    size_t scratch_size;
 } PcScaler;
 
 PcScaler *pc_scaler_new(void) {
@@ -241,6 +246,7 @@ void pc_scaler_free(PcScaler *scaler) {
         return;
     }
     sws_freeContext(scaler->context);
+    av_free(scaler->scratch);
     av_free(scaler);
 }
 
@@ -284,5 +290,279 @@ int pc_scaler_nv12_to_nv12(PcScaler *scaler, const PcFrame *frame, uint8_t *y, i
     uint8_t *const target[4] = {y, uv, NULL, NULL};
     const int target_stride[4] = {y_stride, uv_stride, 0, 0};
     sws_scale(scaler->context, source, source_stride, 0, frame->height, target, target_stride);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The picture transform: crop, scale, rotate, mirror and flip in one pass, for the camera feed
+// and the preview alike
+// ---------------------------------------------------------------------------------------------
+
+// Mirrors engine/src/decoder.rs `RawTransform`. Every coordinate and size is even.
+typedef struct PcTransform {
+    // The part of the source to use, in source pixels.
+    int32_t crop_x;
+    int32_t crop_y;
+    int32_t crop_width;
+    int32_t crop_height;
+    // Clockwise degrees: 0, 90, 180 or 270. Applied first, then the mirror, then the flip.
+    int32_t rotation;
+    int32_t mirror;
+    int32_t flip;
+    // Where the picture lands in the target. The rest of the target becomes black.
+    int32_t content_x;
+    int32_t content_y;
+    int32_t content_width;
+    int32_t content_height;
+} PcTransform;
+
+// Edge length of the square tiles a rotation is copied in, so both the rows read and the rows
+// written stay in the cache.
+#define PC_TILE 64
+
+static int is_even(int32_t value) {
+    return (value & 1) == 0;
+}
+
+static int ensure_scratch(PcScaler *scaler, size_t size) {
+    if (scaler->scratch_size >= size) {
+        return 0;
+    }
+    av_free(scaler->scratch);
+    scaler->scratch = av_malloc(size);
+    scaler->scratch_size = scaler->scratch == NULL ? 0 : size;
+    return scaler->scratch == NULL ? AVERROR(ENOMEM) : 0;
+}
+
+// Limited-range black: luma 16, neutral chroma.
+static void fill_black(uint8_t *y, int y_stride, uint8_t *uv, int uv_stride, int width,
+                       int height) {
+    for (int row = 0; row < height; row++) {
+        memset(y + (ptrdiff_t)row * y_stride, 16, (size_t)width);
+    }
+    for (int row = 0; row < height / 2; row++) {
+        memset(uv + (ptrdiff_t)row * uv_stride, 128, (size_t)width);
+    }
+}
+
+// Scales with the legacy context, which FFmpeg rebuilds cheaply when the crop changes size
+// (the dynamic sws_scale_frame mode rebuilds a whole thread pool, over 100 ms). Enlarging uses
+// bicubic for sharpness; shrinking uses bilinear, which swscale widens to the scale factor so
+// it still averages every source pixel, at a fraction of bicubic's cost.
+static int scale_nv12(PcScaler *scaler, const uint8_t *source_y, int source_y_stride,
+                      const uint8_t *source_uv, int source_uv_stride, int source_width,
+                      int source_height, uint8_t *y, int y_stride, uint8_t *uv, int uv_stride,
+                      int width, int height) {
+    int enlarging = width > source_width || height > source_height;
+    scaler->context = sws_getCachedContext(
+        scaler->context, source_width, source_height, AV_PIX_FMT_NV12, width, height,
+        AV_PIX_FMT_NV12, enlarging ? SWS_BICUBIC : SWS_BILINEAR, NULL, NULL, NULL);
+    if (scaler->context == NULL) {
+        return AVERROR(EINVAL);
+    }
+    const uint8_t *const source[4] = {source_y, source_uv, NULL, NULL};
+    const int source_stride[4] = {source_y_stride, source_uv_stride, 0, 0};
+    uint8_t *const target[4] = {y, uv, NULL, NULL};
+    const int target_stride[4] = {y_stride, uv_stride, 0, 0};
+    sws_scale(scaler->context, source, source_stride, 0, source_height, target, target_stride);
+    return 0;
+}
+
+// Reverses the four 2-byte pairs in a 64-bit block.
+static uint64_t reverse_pairs(uint64_t value) {
+    value = ((value & 0x0000FFFF0000FFFFull) << 16) | ((value >> 16) & 0x0000FFFF0000FFFFull);
+    return (value << 32) | (value >> 32);
+}
+
+// Reverses the eight bytes in a 64-bit block.
+static uint64_t reverse_bytes(uint64_t value) {
+    value = ((value & 0x00FF00FF00FF00FFull) << 8) | ((value >> 8) & 0x00FF00FF00FF00FFull);
+    return reverse_pairs(value);
+}
+
+// Reverses the order of `count` elements of `size` bytes (1 or 2) in every row, in place,
+// eight bytes at a time from both ends.
+static void mirror_rows(uint8_t *plane, int stride, int rows, int count, int size) {
+    int bytes = count * size;
+    for (int row = 0; row < rows; row++) {
+        uint8_t *line = plane + (ptrdiff_t)row * stride;
+        int left = 0;
+        int right = bytes;
+        while (right - left >= 16) {
+            uint64_t head;
+            uint64_t tail;
+            memcpy(&head, line + left, 8);
+            memcpy(&tail, line + right - 8, 8);
+            head = size == 1 ? reverse_bytes(head) : reverse_pairs(head);
+            tail = size == 1 ? reverse_bytes(tail) : reverse_pairs(tail);
+            memcpy(line + left, &tail, 8);
+            memcpy(line + right - 8, &head, 8);
+            left += 8;
+            right -= 8;
+        }
+        // Fewer than sixteen bytes remain in the middle.
+        for (int first = left, last = right - size; first < last; first += size, last -= size) {
+            for (int byte = 0; byte < size; byte++) {
+                uint8_t swap = line[first + byte];
+                line[first + byte] = line[last + byte];
+                line[last + byte] = swap;
+            }
+        }
+    }
+}
+
+// Swaps the rows of a plane top to bottom, in place, through a buffer of `row_bytes`.
+static void flip_rows(uint8_t *plane, int stride, int rows, int row_bytes, uint8_t *buffer) {
+    for (int top = 0, bottom = rows - 1; top < bottom; top++, bottom--) {
+        uint8_t *upper = plane + (ptrdiff_t)top * stride;
+        uint8_t *lower = plane + (ptrdiff_t)bottom * stride;
+        memcpy(buffer, upper, (size_t)row_bytes);
+        memcpy(upper, lower, (size_t)row_bytes);
+        memcpy(lower, buffer, (size_t)row_bytes);
+    }
+}
+
+// target(x, y) = source(column columns[y], row rows[x]) for elements of `size` bytes (1 for
+// luma, 2 for an interleaved chroma pair). This is a transposition with reordered indices,
+// which covers both quarter turns with any mirror and flip.
+static void remap(const uint8_t *source, int source_stride, uint8_t *target, int target_stride,
+                  int width, int height, const int32_t *rows, const int32_t *columns, int size) {
+    for (int tile_y = 0; tile_y < height; tile_y += PC_TILE) {
+        int end_y = tile_y + PC_TILE < height ? tile_y + PC_TILE : height;
+        for (int tile_x = 0; tile_x < width; tile_x += PC_TILE) {
+            int end_x = tile_x + PC_TILE < width ? tile_x + PC_TILE : width;
+            for (int y = tile_y; y < end_y; y++) {
+                uint8_t *line = target + (ptrdiff_t)y * target_stride;
+                const uint8_t *column = source + (ptrdiff_t)columns[y] * size;
+                if (size == 1) {
+                    for (int x = tile_x; x < end_x; x++) {
+                        line[x] = column[(ptrdiff_t)rows[x] * source_stride];
+                    }
+                } else {
+                    for (int x = tile_x; x < end_x; x++) {
+                        const uint8_t *pair = column + (ptrdiff_t)rows[x] * source_stride;
+                        line[2 * x] = pair[0];
+                        line[2 * x + 1] = pair[1];
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Fills the index maps that turn a quarter-turned picture of `width` x `height` (the size after
+// turning) with the mirror and flip applied on top.
+static void quarter_turn_maps(int rotation, int mirror, int flip, int width, int height,
+                              int32_t *rows, int32_t *columns) {
+    for (int x = 0; x < width; x++) {
+        int oriented = mirror ? width - 1 - x : x;
+        rows[x] = rotation == 90 ? width - 1 - oriented : oriented;
+    }
+    for (int y = 0; y < height; y++) {
+        int oriented = flip ? height - 1 - y : y;
+        columns[y] = rotation == 90 ? oriented : height - 1 - oriented;
+    }
+}
+
+// Turns the `crop` of `frame` into the target picture as `transform` describes. The target is
+// `width` x `height` NV12; outside the content rectangle it becomes black. Returns 0 on success.
+int pc_transform_nv12(PcScaler *scaler, const PcFrame *frame, const PcTransform *transform,
+                      uint8_t *y, int y_stride, uint8_t *uv, int uv_stride, int width,
+                      int height) {
+    const PcTransform *t = transform;
+    int rotation = t->rotation;
+    int mirror = t->mirror != 0;
+    int flip = t->flip != 0;
+    if (rotation == 180) {
+        // A half turn is a mirror and a flip together.
+        rotation = 0;
+        mirror = !mirror;
+        flip = !flip;
+    }
+
+    int valid = (rotation == 0 || rotation == 90 || rotation == 270) && is_even(t->crop_x) &&
+                is_even(t->crop_y) && is_even(t->crop_width) && is_even(t->crop_height) &&
+                is_even(t->content_x) && is_even(t->content_y) && is_even(t->content_width) &&
+                is_even(t->content_height) && t->crop_x >= 0 && t->crop_y >= 0 &&
+                t->crop_width >= 2 && t->crop_height >= 2 &&
+                t->crop_x + t->crop_width <= frame->width &&
+                t->crop_y + t->crop_height <= frame->height && t->content_x >= 0 &&
+                t->content_y >= 0 && t->content_width >= 2 && t->content_height >= 2 &&
+                t->content_x + t->content_width <= width &&
+                t->content_y + t->content_height <= height;
+    if (!valid) {
+        return AVERROR(EINVAL);
+    }
+
+    if (t->content_x != 0 || t->content_y != 0 || t->content_width != width ||
+        t->content_height != height) {
+        fill_black(y, y_stride, uv, uv_stride, width, height);
+    }
+
+    const uint8_t *source_y =
+        frame->y + (ptrdiff_t)t->crop_y * frame->y_stride + t->crop_x;
+    const uint8_t *source_uv =
+        frame->uv + (ptrdiff_t)(t->crop_y / 2) * frame->uv_stride + t->crop_x;
+    uint8_t *content_y = y + (ptrdiff_t)t->content_y * y_stride + t->content_x;
+    uint8_t *content_uv = uv + (ptrdiff_t)(t->content_y / 2) * uv_stride + t->content_x;
+    int content_width = t->content_width;
+    int content_height = t->content_height;
+
+    int result;
+    if (rotation == 0) {
+        result = scale_nv12(scaler, source_y, frame->y_stride, source_uv,
+                                frame->uv_stride, t->crop_width, t->crop_height, content_y,
+                                y_stride, content_uv, uv_stride, content_width, content_height);
+        if (result < 0) {
+            return result;
+        }
+        if (mirror) {
+            mirror_rows(content_y, y_stride, content_height, content_width, 1);
+            mirror_rows(content_uv, uv_stride, content_height / 2, content_width / 2, 2);
+        }
+        if (flip) {
+            result = ensure_scratch(scaler, (size_t)content_width);
+            if (result < 0) {
+                return result;
+            }
+            flip_rows(content_y, y_stride, content_height, content_width, scaler->scratch);
+            flip_rows(content_uv, uv_stride, content_height / 2, content_width,
+                      scaler->scratch);
+        }
+        return 0;
+    }
+
+    // A quarter turn: scale into the scratch picture at the turned size, then turn it into
+    // place with the mirror and flip folded into the index maps.
+    int turned_width = content_height;
+    int turned_height = content_width;
+    size_t luma_size = (size_t)turned_width * (size_t)turned_height;
+    size_t chroma_size = luma_size / 2;
+    // The maps start on a 16-byte boundary after the picture.
+    size_t maps_offset = (luma_size + chroma_size + 15) & ~(size_t)15;
+    size_t maps_size = sizeof(int32_t) * (size_t)(content_width + content_height);
+    result = ensure_scratch(scaler, maps_offset + maps_size);
+    if (result < 0) {
+        return result;
+    }
+    uint8_t *turned_y = scaler->scratch;
+    uint8_t *turned_uv = turned_y + luma_size;
+    int32_t *rows = (int32_t *)(scaler->scratch + maps_offset);
+    int32_t *columns = rows + content_width;
+
+    result = scale_nv12(scaler, source_y, frame->y_stride, source_uv, frame->uv_stride,
+                        t->crop_width, t->crop_height, turned_y, turned_width, turned_uv,
+                        turned_width, turned_width, turned_height);
+    if (result < 0) {
+        return result;
+    }
+
+    quarter_turn_maps(rotation, mirror, flip, content_width, content_height, rows, columns);
+    remap(turned_y, turned_width, content_y, y_stride, content_width, content_height, rows,
+          columns, 1);
+    quarter_turn_maps(rotation, mirror, flip, content_width / 2, content_height / 2, rows,
+                      columns);
+    remap(turned_uv, turned_width, content_uv, uv_stride, content_width / 2, content_height / 2,
+          rows, columns, 2);
     return 0;
 }

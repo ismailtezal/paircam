@@ -5,8 +5,8 @@
 //! Service, so the DLL fetches pictures from this process over a named pipe. This module is the
 //! app's side of that arrangement:
 //!
-//! - [`VirtualCamera`] runs the pipe server, fits every decoded picture into the camera's fixed
-//!   1920x1080 (letterboxed, never stretched) and reports whether any app is using the camera.
+//! - [`VirtualCamera`] runs the pipe server, sends the engine's finished 1920x1080 pictures (see
+//!   `picture` for how they are framed) and reports whether any app is using the camera.
 //! - [`register_with_windows`] makes the camera appear in apps while PairCam runs.
 //! - [`is_installed`] says whether the camera DLL has been registered, which takes
 //!   administrator rights once (`scripts/register-vcam.ps1`).
@@ -60,8 +60,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{GUID, HRESULT, HSTRING, Interface, PCWSTR, PWSTR, s, w};
 
-use crate::decoder::{DecodeError, Nv12Frame, Nv12Planes, Nv12PlanesMut, Scaler};
-use crate::{FrameSink, lock};
+use crate::decoder::{DecodeError, Nv12Planes, Nv12PlanesMut, Scaler};
+use crate::{CameraFrame, FrameSink, lock, picture};
 
 // -------------------------------------------------------------------------------------------------
 // The contract with the DLL (native/vcam/include/paircam_vcam.h)
@@ -174,31 +174,19 @@ struct Rect {
 
 /// Fits a `source_width` x `source_height` picture into the camera frame, keeping its aspect
 /// ratio: bars above and below a wider picture, at the sides of a taller one.
+///
+/// The engine already delivers camera-sized pictures; this only guards against any other size.
 fn letterbox(source_width: u32, source_height: u32) -> Rect {
-    let source_width = u64::from(source_width.max(1));
-    let source_height = u64::from(source_height.max(1));
-    let (target_width, target_height) = (u64::from(WIDTH), u64::from(HEIGHT));
-
-    // Rounds a / b to the nearest even number in 2..=limit.
-    let even = |a: u64, b: u64, limit: u64| ((a + b) / (2 * b) * 2).clamp(2, limit);
-
-    let (width, height) = if source_width * target_height >= source_height * target_width {
-        let height = even(source_height * target_width, source_width, target_height);
-        (target_width, height)
-    } else {
-        let width = even(source_width * target_height, source_height, target_width);
-        (width, target_height)
-    };
+    let fitted = picture::letterbox(source_width, source_height, WIDTH, HEIGHT);
     Rect {
-        x: (((target_width - width) / 2) & !1) as u32,
-        y: (((target_height - height) / 2) & !1) as u32,
-        width: width as u32,
-        height: height as u32,
+        x: fitted.x,
+        y: fitted.y,
+        width: fitted.width,
+        height: fitted.height,
     }
 }
 
-/// A decoded picture copied out of the decoder: tightly packed NV12 as
-/// [`Nv12Frame::copy_packed`] lays it out.
+/// A picture waiting to be sent: tightly packed NV12.
 struct Picture {
     width: u32,
     height: u32,
@@ -469,18 +457,23 @@ impl Inner {
         Ok(Handle(pipe))
     }
 
-    /// Hands a decoded picture to the composer thread. Cheap when nobody uses the camera.
-    fn submit(&self, frame: &Nv12Frame<'_>) {
-        if self.connected.load(Ordering::Acquire) == 0 || self.shutting_down.load(Ordering::Relaxed)
-        {
+    /// Whether a camera is connected to take pictures.
+    fn wants_frames(&self) -> bool {
+        self.connected.load(Ordering::Acquire) > 0 && !self.shutting_down.load(Ordering::Relaxed)
+    }
+
+    /// Hands a finished picture to the composer thread. Cheap when nobody uses the camera.
+    fn submit(&self, frame: &CameraFrame<'_>) {
+        if !self.wants_frames() {
             return;
         }
         let mut data = lock(&self.pending).spare_inputs.pop().unwrap_or_default();
-        frame.copy_packed(&mut data);
+        data.clear();
+        data.extend_from_slice(frame.nv12);
         self.submit_picture(Picture {
-            width: frame.width(),
-            height: frame.height(),
-            timestamp_us: frame.timestamp_us(),
+            width: frame.width,
+            height: frame.height,
+            timestamp_us: frame.timestamp_us,
             data,
         });
     }
@@ -984,7 +977,11 @@ impl Drop for VirtualCamera {
 }
 
 impl FrameSink for VirtualCamera {
-    fn frame(&mut self, frame: &Nv12Frame<'_>) {
+    fn wants_frames(&self) -> bool {
+        self.inner.wants_frames()
+    }
+
+    fn frame(&mut self, frame: &CameraFrame<'_>) {
         self.inner.submit(frame);
     }
 
@@ -999,7 +996,11 @@ pub struct VirtualCameraSink {
 }
 
 impl FrameSink for VirtualCameraSink {
-    fn frame(&mut self, frame: &Nv12Frame<'_>) {
+    fn wants_frames(&self) -> bool {
+        self.inner.wants_frames()
+    }
+
+    fn frame(&mut self, frame: &CameraFrame<'_>) {
         self.inner.submit(frame);
     }
 
@@ -1315,6 +1316,14 @@ mod tests {
         ];
         expected.extend(guid.data4.iter().map(|&byte| u128::from(byte)));
         assert_eq!(numbers, expected);
+    }
+
+    #[test]
+    fn the_camera_takes_the_engine_output_size() {
+        assert_eq!(
+            (WIDTH, HEIGHT),
+            (picture::OUTPUT_WIDTH, picture::OUTPUT_HEIGHT)
+        );
     }
 
     #[test]

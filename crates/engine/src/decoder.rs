@@ -6,6 +6,8 @@ use std::ptr::NonNull;
 
 use paircam_protocol::Codec;
 
+use crate::picture::Plan;
+
 #[repr(C)]
 struct RawFrame {
     width: i32,
@@ -15,6 +17,22 @@ struct RawFrame {
     y_stride: i32,
     uv: *const u8,
     uv_stride: i32,
+}
+
+/// Mirrors `PcTransform` in `native/decoder.c`.
+#[repr(C)]
+struct RawTransform {
+    crop_x: i32,
+    crop_y: i32,
+    crop_width: i32,
+    crop_height: i32,
+    rotation: i32,
+    mirror: i32,
+    flip: i32,
+    content_x: i32,
+    content_y: i32,
+    content_width: i32,
+    content_height: i32,
 }
 
 #[repr(C)]
@@ -61,6 +79,18 @@ unsafe extern "C" {
     fn pc_scaler_nv12_to_nv12(
         scaler: *mut RawScaler,
         frame: *const RawFrame,
+        y: *mut u8,
+        y_stride: c_int,
+        uv: *mut u8,
+        uv_stride: c_int,
+        width: c_int,
+        height: c_int,
+    ) -> c_int;
+    #[allow(clippy::too_many_arguments)]
+    fn pc_transform_nv12(
+        scaler: *mut RawScaler,
+        frame: *const RawFrame,
+        transform: *const RawTransform,
         y: *mut u8,
         y_stride: c_int,
         uv: *mut u8,
@@ -259,17 +289,99 @@ impl Scaler {
         height: u32,
         target: &mut Vec<u8>,
     ) -> Result<(), DecodeError> {
+        self.raw_to_bgra(&frame.raw, width, height, target)
+    }
+
+    /// Like [`Scaler::nv12_to_bgra`], for an NV12 picture in memory.
+    pub fn planes_to_bgra(
+        &mut self,
+        source: Nv12Planes<'_>,
+        width: u32,
+        height: u32,
+        target: &mut Vec<u8>,
+    ) -> Result<(), DecodeError> {
+        if !source.is_valid() {
+            return Err(DecodeError(
+                "NV12 planes are too small for their size".into(),
+            ));
+        }
+        self.raw_to_bgra(&source.raw(), width, height, target)
+    }
+
+    fn raw_to_bgra(
+        &mut self,
+        frame: &RawFrame,
+        width: u32,
+        height: u32,
+        target: &mut Vec<u8>,
+    ) -> Result<(), DecodeError> {
         let stride = width as usize * 4;
         target.resize(stride * height as usize, 0);
         // SAFETY: `target` holds `stride * height` bytes and the frame planes are live.
         let result = unsafe {
             pc_scaler_nv12_to_bgra(
                 self.raw.as_ptr(),
-                &frame.raw,
+                frame,
                 target.as_mut_ptr(),
                 width as c_int,
                 height as c_int,
                 stride as c_int,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(error_from_code(result))
+        }
+    }
+
+    /// Turns `source` into `target` as `plan` says: the crop, scaled into the content
+    /// rectangle, turned, mirrored and flipped, with black bars around it. The target's size
+    /// must be the plan's output size.
+    ///
+    /// Like [`Scaler::nv12_to_nv12`], keep one scaler per target size.
+    pub fn transform_nv12(
+        &mut self,
+        source: Nv12Planes<'_>,
+        plan: &Plan,
+        target: Nv12PlanesMut<'_>,
+    ) -> Result<(), DecodeError> {
+        if !source.is_valid() || !target.as_planes().is_valid() {
+            return Err(DecodeError(
+                "NV12 planes are too small for their size".into(),
+            ));
+        }
+        if (target.width, target.height) != (plan.output_width, plan.output_height) {
+            return Err(DecodeError("the target does not match the plan".into()));
+        }
+        let int = |value: u32| value.min(i32::MAX as u32) as i32;
+        let transform = RawTransform {
+            crop_x: int(plan.crop.x),
+            crop_y: int(plan.crop.y),
+            crop_width: int(plan.crop.width),
+            crop_height: int(plan.crop.height),
+            rotation: i32::from(plan.rotation.degrees()),
+            mirror: i32::from(plan.mirror),
+            flip: i32::from(plan.flip),
+            content_x: int(plan.content.x),
+            content_y: int(plan.content.y),
+            content_width: int(plan.content.width),
+            content_height: int(plan.content.height),
+        };
+        // SAFETY: both pictures were checked to fit their slices, which stay borrowed for the
+        // call, and the target slices are exclusive. The C side checks the rectangles against
+        // the sizes before touching any pixel.
+        let result = unsafe {
+            pc_transform_nv12(
+                self.raw.as_ptr(),
+                &source.raw(),
+                &transform,
+                target.y.as_mut_ptr(),
+                target.y_stride as c_int,
+                target.uv.as_mut_ptr(),
+                target.uv_stride as c_int,
+                target.width as c_int,
+                target.height as c_int,
             )
         };
         if result == 0 {
@@ -294,21 +406,12 @@ impl Scaler {
                 "NV12 planes are too small for their size".into(),
             ));
         }
-        let raw = RawFrame {
-            width: source.width as i32,
-            height: source.height as i32,
-            pts: 0,
-            y: source.y.as_ptr(),
-            y_stride: source.y_stride as i32,
-            uv: source.uv.as_ptr(),
-            uv_stride: source.uv_stride as i32,
-        };
         // SAFETY: both pictures were checked to fit their slices, which stay borrowed for the
         // call, and the target slices are exclusive.
         let result = unsafe {
             pc_scaler_nv12_to_nv12(
                 self.raw.as_ptr(),
-                &raw,
+                &source.raw(),
                 target.y.as_mut_ptr(),
                 target.y_stride as c_int,
                 target.uv.as_mut_ptr(),
@@ -360,6 +463,19 @@ impl Nv12PlanesMut<'_> {
 }
 
 impl Nv12Planes<'_> {
+    /// The C view of the planes. Only valid while the borrowed slices are.
+    fn raw(&self) -> RawFrame {
+        RawFrame {
+            width: self.width as i32,
+            height: self.height as i32,
+            pts: 0,
+            y: self.y.as_ptr(),
+            y_stride: self.y_stride as i32,
+            uv: self.uv.as_ptr(),
+            uv_stride: self.uv_stride as i32,
+        }
+    }
+
     /// Whether both planes hold every row the size calls for, and the size fits FFmpeg.
     fn is_valid(&self) -> bool {
         fn fits(len: usize, stride: usize, rows: usize, row_bytes: usize) -> bool {

@@ -78,6 +78,36 @@ inspector:
   focus_lock: Odağı kilitle
   white_balance_lock: Beyaz dengesini kilitle
 
+picture:
+  title: GÖRÜNTÜ
+  reset: Sıfırla
+  zoom: Dijital yakınlaştırma
+  rotation: Döndürme
+  degrees: "%{degrees}°"
+  fit: Kareyi doldurma
+  fit_fit: Sığdır
+  fit_fill: Doldur
+  fit_stretch: Uzat
+  mirror: Aynala
+  flip: Ters çevir
+
+tracking:
+  title: TAKİP
+  face: Yüz takibi
+  framing: Kadraj
+  framing_wide: Geniş
+  framing_medium: Orta
+  framing_close: Yakın
+  gestures: El hareketleri
+  gesture_palm: "Açık avuç: yüz takibini aç veya kapat"
+  gesture_frame: "Başparmak ve işaret parmağıyla L: 2× yakınlaştır ve geri dön"
+  gesture_spread: "İki eli açıp kapat: yakınlaştır veya uzaklaştır"
+
+gesture:
+  palm: Açık avuç
+  frame: Çerçeve
+  spread: İki elle yakınlaştırma
+
 quality:
   low: "Düşük · 6 Mbps"
   medium: "Orta · 12 Mbps"

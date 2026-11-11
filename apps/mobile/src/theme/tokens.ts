@@ -123,7 +123,8 @@ export const tokens = {
       "instant": 80,
       "fast": 150,
       "base": 220,
-      "slow": 350
+      "slow": 350,
+      "notice": 1600
     },
     "easing": {
       "out": [

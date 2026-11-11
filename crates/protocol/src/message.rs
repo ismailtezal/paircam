@@ -18,6 +18,8 @@ mod kind {
     pub const REQUEST_KEYFRAME: u8 = 0x12;
     pub const CONTROL: u8 = 0x20;
     pub const CONTROL_STATE: u8 = 0x21;
+    pub const SUBJECT: u8 = 0x22;
+    pub const GESTURE: u8 = 0x23;
     pub const STATS: u8 = 0x30;
     pub const LOG: u8 = 0x31;
     pub const PING: u8 = 0x3E;
@@ -39,6 +41,8 @@ pub enum Message {
     RequestKeyframe,
     Control(ControlValues),
     ControlState(ControlValues),
+    Subject(Subject),
+    Gesture(Gesture),
     Stats(Stats),
     Log(LogEntry),
     Ping(u64),
@@ -63,6 +67,8 @@ impl Message {
             Self::RequestKeyframe => vec![kind::REQUEST_KEYFRAME],
             Self::Control(value) => json(kind::CONTROL, value),
             Self::ControlState(value) => json(kind::CONTROL_STATE, value),
+            Self::Subject(value) => json(kind::SUBJECT, value),
+            Self::Gesture(value) => json(kind::GESTURE, value),
             Self::Stats(value) => json(kind::STATS, value),
             Self::Log(value) => json(kind::LOG, value),
             Self::Ping(timestamp) => timestamped(kind::PING, *timestamp),
@@ -92,6 +98,8 @@ impl Message {
             kind::REQUEST_KEYFRAME => Self::RequestKeyframe,
             kind::CONTROL => Self::Control(parse("control", &payload)?),
             kind::CONTROL_STATE => Self::ControlState(parse("controlState", &payload)?),
+            kind::SUBJECT => Self::Subject(parse("subject", &payload)?),
+            kind::GESTURE => Self::Gesture(parse("gesture", &payload)?),
             kind::STATS => Self::Stats(parse("stats", &payload)?),
             kind::LOG => Self::Log(parse("log", &payload)?),
             kind::PING => Self::Ping(timestamp("ping", &payload)?),
@@ -322,6 +330,12 @@ pub struct ControlCapabilities {
     pub torch: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub stabilization: Vec<Stabilization>,
+    /// The camera can find the person and report them in [`Subject`] messages.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub face_tracking: bool,
+    /// The hand gestures the camera can recognise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gestures: Vec<GestureKind>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -398,6 +412,66 @@ pub struct ControlValues {
     pub torch: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stabilization: Option<Stabilization>,
+    /// Whether the camera reports where the person is, in [`Subject`] messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub face_tracking: Option<bool>,
+    /// Whether the camera watches for hand gestures and acts on them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gestures: Option<bool>,
+}
+
+/// A rectangle in the picture, with both axes from 0 to 1 and the origin at the top left.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Where the person is in the encoded picture, while face tracking is on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Subject {
+    /// The face, or `None` when nobody is in view. Always written, as `null` when empty.
+    pub face: Option<Rect>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GestureKind {
+    /// An open palm held up: toggles face tracking.
+    Palm,
+    /// Thumb and index finger in an L shape: zooms to 2× and back.
+    Frame,
+    /// Two hands moving apart or together: zooms continuously.
+    Spread,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GesturePhase {
+    /// A one-off gesture was recognised and acted on.
+    #[default]
+    Recognised,
+    /// A continuous gesture started.
+    Began,
+    /// A continuous gesture ended.
+    Ended,
+    #[serde(other)]
+    Unknown,
+}
+
+/// A hand gesture the camera recognised and acted on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Gesture {
+    pub kind: GestureKind,
+    pub phase: GesturePhase,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -490,6 +564,8 @@ mod tests {
                 }),
                 focus: vec![FocusMode::Auto, FocusMode::Locked],
                 torch: true,
+                face_tracking: true,
+                gestures: vec![GestureKind::Palm, GestureKind::Frame, GestureKind::Spread],
                 ..Default::default()
             },
         }));
@@ -527,7 +603,22 @@ mod tests {
             focus: Some(FocusMode::Auto),
             exposure_bias: Some(0.0),
             torch: Some(false),
+            face_tracking: Some(true),
+            gestures: Some(false),
             ..Default::default()
+        }));
+        round_trip(Message::Subject(Subject {
+            face: Some(Rect {
+                x: 0.41,
+                y: 0.22,
+                width: 0.18,
+                height: 0.24,
+            }),
+        }));
+        round_trip(Message::Subject(Subject { face: None }));
+        round_trip(Message::Gesture(Gesture {
+            kind: GestureKind::Spread,
+            phase: GesturePhase::Began,
         }));
         round_trip(Message::Stats(Stats {
             fps: 29.97,
@@ -576,6 +667,70 @@ mod tests {
         };
         assert_eq!(stats.fps, 30.0);
         assert_eq!(stats.thermal, Thermal::Unknown);
+
+        let mut message = vec![kind::GESTURE];
+        message.extend_from_slice(br#"{"kind":"wave","phase":"halfway","hand":"left"}"#);
+        assert_eq!(
+            Message::decode(message).unwrap(),
+            Message::Gesture(Gesture {
+                kind: GestureKind::Unknown,
+                phase: GesturePhase::Unknown,
+            })
+        );
+
+        let mut message = vec![kind::CAPABILITIES];
+        message.extend_from_slice(
+            br#"{"controls":{"faceTracking":true,"gestures":["palm","snap","spread"]}}"#,
+        );
+        let Message::Capabilities(capabilities) = Message::decode(message).unwrap() else {
+            panic!("expected capabilities");
+        };
+        assert!(capabilities.controls.face_tracking);
+        assert_eq!(
+            capabilities.controls.gestures,
+            vec![GestureKind::Palm, GestureKind::Unknown, GestureKind::Spread]
+        );
+    }
+
+    #[test]
+    fn subject_writes_an_empty_face_as_null() {
+        let message = Message::Subject(Subject { face: None }).encode();
+        assert_eq!(message[0], 0x22);
+        assert_eq!(&message[1..], br#"{"face":null}"#);
+
+        let mut message = vec![kind::SUBJECT];
+        message.extend_from_slice(br#"{"face":{"x":0.5,"y":0.25,"width":0.1,"height":0.2}}"#);
+        let Message::Subject(subject) = Message::decode(message).unwrap() else {
+            panic!("expected subject");
+        };
+        assert_eq!(
+            subject.face,
+            Some(Rect {
+                x: 0.5,
+                y: 0.25,
+                width: 0.1,
+                height: 0.2,
+            })
+        );
+    }
+
+    #[test]
+    fn tracking_controls_use_the_specified_names() {
+        let message = Message::Control(ControlValues {
+            face_tracking: Some(true),
+            ..Default::default()
+        })
+        .encode();
+        assert_eq!(message[0], 0x20);
+        assert_eq!(&message[1..], br#"{"faceTracking":true}"#);
+
+        let message = Message::Gesture(Gesture {
+            kind: GestureKind::Palm,
+            phase: GesturePhase::Recognised,
+        })
+        .encode();
+        assert_eq!(message[0], 0x23);
+        assert_eq!(&message[1..], br#"{"kind":"palm","phase":"recognised"}"#);
     }
 
     #[test]

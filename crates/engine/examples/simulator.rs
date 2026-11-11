@@ -9,6 +9,12 @@
 //!
 //! The desktop app finds it on the network; the `headless` example connects to
 //! `127.0.0.1:47810`.
+//!
+//! It also plays a person for face tracking and hand gestures. An orange square stands in for
+//! a face: it wanders around the picture and leaves now and then. While face tracking is on,
+//! the simulator reports where it is in `subject` messages, as the phone does. While gestures
+//! are on, it performs one every few seconds (`--gesture-seconds`), acts on it as the phone
+//! would and tells the desktop.
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read};
@@ -24,10 +30,10 @@ use bytes::Bytes;
 use paircam_engine::discovery::Advertisement;
 use paircam_engine::protocol::{
     CameraHandshake, CameraInfo, Capabilities, Codec, Configure, ControlCapabilities,
-    ControlValues, DEFAULT_PORT, DeviceId, FocusMode, Format, Hello, Lens, Message, Mode, Opener,
-    PairResult, PairingKey, Position, Range, SERVICE_TYPE, Sealer, Stabilization, Stats, Status,
-    Thermal, UNPAIRED, VideoConfig, VideoFrame, WhiteBalanceMode, random_bytes, read_record,
-    write_record,
+    ControlValues, DEFAULT_PORT, DeviceId, FocusMode, Format, Gesture, GestureKind, GesturePhase,
+    Hello, Lens, Message, Mode, Opener, PairResult, PairingKey, Position, Range, Rect,
+    SERVICE_TYPE, Sealer, Stabilization, Stats, Status, Subject, Thermal, UNPAIRED, VideoConfig,
+    VideoFrame, WhiteBalanceMode, random_bytes, read_record, write_record,
 };
 
 struct Options {
@@ -38,6 +44,12 @@ struct Options {
     pair_delay: u64,
     encoder: Option<String>,
     ffmpeg: PathBuf,
+    /// Seconds between simulated hand gestures while gestures are on.
+    gesture_seconds: f32,
+    /// Start with face tracking on, as if the user had turned it on on the phone.
+    tracking: bool,
+    /// Start with hand gestures on.
+    gestures: bool,
 }
 
 fn options() -> Options {
@@ -49,6 +61,9 @@ fn options() -> Options {
         encoder: None,
         ffmpeg: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../third_party/ffmpeg/bin/ffmpeg.exe"),
+        gesture_seconds: 6.0,
+        tracking: false,
+        gestures: false,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -60,6 +75,11 @@ fn options() -> Options {
             "--pair-delay" => options.pair_delay = value().parse().expect("milliseconds"),
             "--encoder" => options.encoder = Some(value()),
             "--ffmpeg" => options.ffmpeg = PathBuf::from(value()),
+            "--tracking" => options.tracking = true,
+            "--gestures" => options.gestures = true,
+            "--gesture-seconds" => {
+                options.gesture_seconds = value().parse().expect("a number of seconds");
+            }
             other => panic!("unknown option {other}"),
         }
     }
@@ -176,16 +196,28 @@ fn serve(
     }
 
     send(&writer, &Message::Capabilities(capabilities()));
-    let mut controls = ControlValues {
+    let controls = Arc::new(Mutex::new(ControlValues {
         zoom: Some(1.0),
         focus: Some(FocusMode::Auto),
         exposure_bias: Some(0.0),
         white_balance: Some(WhiteBalanceMode::Auto),
         torch: Some(false),
         stabilization: Some(Stabilization::Standard),
+        face_tracking: Some(options.tracking),
+        gestures: Some(options.gestures),
         ..Default::default()
-    };
-    send(&writer, &Message::ControlState(controls.clone()));
+    }));
+    send(
+        &writer,
+        &Message::ControlState(controls.lock().unwrap().clone()),
+    );
+    let scene: Scene = Arc::new(Mutex::new(None));
+    let _person = Person::start(
+        writer.clone(),
+        controls.clone(),
+        scene.clone(),
+        options.gesture_seconds,
+    );
 
     let mut configuration: Option<Configure> = None;
     let mut stream_task: Option<StreamTask> = None;
@@ -200,18 +232,22 @@ fn serve(
                 let restart = stream_task.take().is_some();
                 configuration = Some(configure);
                 if restart {
-                    stream_task = start(options, configuration.as_ref(), &writer);
+                    stream_task = start(options, configuration.as_ref(), &writer, &scene);
                 }
             }
             Message::StartStream => {
                 drop(stream_task.take());
-                stream_task = start(options, configuration.as_ref(), &writer);
+                stream_task = start(options, configuration.as_ref(), &writer, &scene);
             }
             Message::StopStream => stream_task = None,
             Message::Control(change) => {
                 println!("simulator: control {change:?}");
-                merge(&mut controls, change);
-                send(&writer, &Message::ControlState(controls.clone()));
+                let state = {
+                    let mut controls = controls.lock().unwrap();
+                    merge(&mut controls, change);
+                    controls.clone()
+                };
+                send(&writer, &Message::ControlState(state));
             }
             Message::Ping(timestamp) => {
                 send(&writer, &Message::Pong(timestamp));
@@ -235,6 +271,188 @@ fn merge(state: &mut ControlValues, change: ControlValues) {
     state.white_balance = change.white_balance.or(state.white_balance);
     state.torch = change.torch.or(state.torch);
     state.stabilization = change.stabilization.or(state.stabilization);
+    state.face_tracking = change.face_tracking.or(state.face_tracking);
+    state.gestures = change.gestures.or(state.gestures);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The simulated person
+// ---------------------------------------------------------------------------------------------
+
+/// When the running stream started and its picture size, so the person's position can be
+/// worked out from the same clock the encoder draws them with.
+type Scene = Arc<Mutex<Option<(Instant, u32, u32)>>>;
+
+/// The face's height as a share of the picture's height, and its width as a share of its
+/// height in pixels.
+const FACE_HEIGHT: f32 = 0.16;
+const FACE_ASPECT: f32 = 0.75;
+
+/// The face's size in pixels for a picture, even as the encoder needs.
+fn face_size(width: u32, height: u32) -> (u32, u32) {
+    let face_height = ((height as f32 * FACE_HEIGHT / 2.0).round() as u32 * 2).max(2);
+    let face_width = ((face_height as f32 * FACE_ASPECT / 2.0).round() as u32 * 2).clamp(2, width);
+    (face_width, face_height)
+}
+
+// The person's path. `path_x` and `path_y` give the face's centre as a share of the picture,
+// `present` whether they are in view; `face_filter` draws the same thing in FFmpeg's terms.
+fn path_x(t: f32) -> f32 {
+    0.5 + 0.28 * (0.45 * t).sin()
+}
+
+fn path_y(t: f32) -> f32 {
+    0.42 + 0.12 * (0.31 * t + 1.0).sin()
+}
+
+fn present(t: f32) -> bool {
+    // In view for the first twelve seconds, then away for about five in every thirty.
+    (0.21 * t - 1.5).sin() < 0.85
+}
+
+/// A lavfi graph that draws the person over the test pattern.
+fn face_filter(width: u32, height: u32, fps: u32) -> String {
+    let (face_width, face_height) = face_size(width, height);
+    format!(
+        "testsrc2=size={width}x{height}:rate={fps}[pattern];\
+         color=c=0xF5A623:size={face_width}x{face_height}:rate={fps}[face];\
+         [pattern][face]overlay=\
+         x='(0.5+0.28*sin(0.45*t))*main_w-overlay_w/2':\
+         y='(0.42+0.12*sin(0.31*t+1))*main_h-overlay_h/2':\
+         enable='lt(sin(0.21*t-1.5),0.85)':shortest=1[out0]"
+    )
+}
+
+/// Where the face is at `t` seconds into the stream, with a little detector noise.
+fn face_at(t: f32, width: u32, height: u32) -> Option<Rect> {
+    if !present(t) {
+        return None;
+    }
+    let (face_width, face_height) = face_size(width, height);
+    let (face_width, face_height) = (
+        face_width as f32 / width as f32,
+        face_height as f32 / height as f32,
+    );
+    let noise = 0.004 * (7.3 * t).sin();
+    Some(Rect {
+        x: path_x(t) - face_width / 2.0 + noise,
+        y: path_y(t) - face_height / 2.0 - noise,
+        width: face_width,
+        height: face_height,
+    })
+}
+
+/// Reports the face and performs gestures, on a thread of its own, until dropped.
+struct Person {
+    running: Arc<AtomicBool>,
+}
+
+impl Person {
+    fn start(
+        writer: Writer,
+        controls: Arc<Mutex<ControlValues>>,
+        scene: Scene,
+        gesture_seconds: f32,
+    ) -> Self {
+        let running = Arc::new(AtomicBool::new(true));
+        {
+            let running = running.clone();
+            thread::spawn(move || {
+                let mut next_gesture: Option<Instant> = None;
+                let mut gestures = [GestureKind::Palm, GestureKind::Frame, GestureKind::Spread]
+                    .into_iter()
+                    .cycle();
+                let mut spreading_until: Option<Instant> = None;
+                while running.load(Ordering::SeqCst) {
+                    // Up to 15 reports a second, as the phone sends.
+                    thread::sleep(Duration::from_millis(66));
+                    let state = controls.lock().unwrap().clone();
+                    let streaming = *scene.lock().unwrap();
+
+                    if state.face_tracking == Some(true)
+                        && let Some((started, width, height)) = streaming
+                    {
+                        let t = started.elapsed().as_secs_f32();
+                        let face = face_at(t, width, height);
+                        if !send(&writer, &Message::Subject(Subject { face })) {
+                            break;
+                        }
+                    }
+
+                    if state.gestures != Some(true) {
+                        next_gesture = None;
+                        continue;
+                    }
+                    let now = Instant::now();
+                    if let Some(until) = spreading_until
+                        && now >= until
+                    {
+                        spreading_until = None;
+                        let zoom = (state.zoom.unwrap_or(1.0) * 1.5).min(4.0);
+                        controls.lock().unwrap().zoom = Some(zoom);
+                        println!("simulator: hands stopped spreading; zoom {zoom:.1}");
+                        perform(&writer, GestureKind::Spread, GesturePhase::Ended, &controls);
+                    }
+                    let due = *next_gesture
+                        .get_or_insert(now + Duration::from_secs_f32(gesture_seconds.max(0.5)));
+                    if now < due || spreading_until.is_some() {
+                        continue;
+                    }
+                    next_gesture = Some(now + Duration::from_secs_f32(gesture_seconds.max(0.5)));
+                    let kind = gestures.next().unwrap_or(GestureKind::Palm);
+                    match kind {
+                        GestureKind::Palm => {
+                            let on = state.face_tracking != Some(true);
+                            controls.lock().unwrap().face_tracking = Some(on);
+                            println!("simulator: open palm; face tracking {on}");
+                            perform(&writer, kind, GesturePhase::Recognised, &controls);
+                        }
+                        GestureKind::Frame => {
+                            let zoom = if state.zoom.unwrap_or(1.0) > 1.5 {
+                                1.0
+                            } else {
+                                2.0
+                            };
+                            controls.lock().unwrap().zoom = Some(zoom);
+                            println!("simulator: L-shaped frame; zoom {zoom:.1}");
+                            perform(&writer, kind, GesturePhase::Recognised, &controls);
+                        }
+                        _ => {
+                            println!("simulator: hands spreading");
+                            spreading_until = Some(now + Duration::from_millis(1200));
+                            let _ = send(
+                                &writer,
+                                &Message::Gesture(Gesture {
+                                    kind,
+                                    phase: GesturePhase::Began,
+                                }),
+                            );
+                        }
+                    }
+                }
+            });
+        }
+        Self { running }
+    }
+}
+
+impl Drop for Person {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Tells the desktop about a gesture the simulated phone acted on, then reports the controls
+/// it changed, as the phone does.
+fn perform(
+    writer: &Writer,
+    kind: GestureKind,
+    phase: GesturePhase,
+    controls: &Mutex<ControlValues>,
+) {
+    let _ = send(writer, &Message::Gesture(Gesture { kind, phase }));
+    let state = controls.lock().unwrap().clone();
+    let _ = send(writer, &Message::ControlState(state));
 }
 
 fn capabilities() -> Capabilities {
@@ -290,6 +508,8 @@ fn capabilities() -> Capabilities {
                 Stabilization::Standard,
                 Stabilization::Cinematic,
             ],
+            face_tracking: true,
+            gestures: vec![GestureKind::Palm, GestureKind::Frame, GestureKind::Spread],
         },
     }
 }
@@ -298,11 +518,13 @@ fn capabilities() -> Capabilities {
 struct StreamTask {
     child: Child,
     running: Arc<AtomicBool>,
+    scene: Scene,
 }
 
 impl Drop for StreamTask {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        *self.scene.lock().unwrap() = None;
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -312,6 +534,7 @@ fn start(
     options: &Options,
     configuration: Option<&Configure>,
     writer: &Writer,
+    scene: &Scene,
 ) -> Option<StreamTask> {
     let configure = configuration?.clone();
     let hevc = configure.codec == Codec::Hevc;
@@ -332,9 +555,10 @@ fn start(
             "lavfi",
             "-i",
         ])
-        .arg(format!(
-            "testsrc2=size={}x{}:rate={}",
-            configure.width, configure.height, configure.fps
+        .arg(face_filter(
+            configure.width,
+            configure.height,
+            configure.fps,
         ))
         .args(["-pix_fmt", "yuv420p", "-c:v", &encoder])
         .args(["-b:v", &configure.bitrate.to_string()])
@@ -370,14 +594,19 @@ fn start(
     let bytes = Arc::new(AtomicU32::new(0));
 
     {
-        let (writer, running, frames, bytes) = (
+        let (writer, running, frames, bytes, scene) = (
             writer.clone(),
             running.clone(),
             frames.clone(),
             bytes.clone(),
+            scene.clone(),
         );
         let configure = configure.clone();
-        thread::spawn(move || forward(output, &configure, &writer, &running, &frames, &bytes));
+        thread::spawn(move || {
+            forward(
+                output, &configure, &writer, &running, &frames, &bytes, &scene,
+            );
+        });
     }
     {
         let (writer, running) = (writer.clone(), running.clone());
@@ -402,7 +631,11 @@ fn start(
         "simulator: streaming {}x{} at {} fps with {encoder}",
         configure.width, configure.height, configure.fps
     );
-    Some(StreamTask { child, running })
+    Some(StreamTask {
+        child,
+        running,
+        scene: scene.clone(),
+    })
 }
 
 /// Reads the encoder's Annex B byte stream, regroups it into access units and sends them.
@@ -413,12 +646,14 @@ fn forward(
     running: &AtomicBool,
     frames: &AtomicU32,
     bytes: &AtomicU32,
+    scene: &Scene,
 ) {
     let hevc = configure.codec == Codec::Hevc;
     let started = Instant::now();
     let mut splitter = NalSplitter::default();
     let mut parameter_sets = ParameterSets::default();
     let mut config_sent = false;
+    let mut frames_sent = 0u64;
     let mut unit = AccessUnit::default();
     let mut chunk = vec![0u8; 64 * 1024];
 
@@ -448,6 +683,14 @@ fn forward(
                 }
                 // Pictures that arrive before the parameter sets cannot be decoded; skip them.
                 if config_sent {
+                    if frames_sent == 0 {
+                        // The encoder draws the person on its own clock, which started one
+                        // frame before this first picture was complete.
+                        let frame = Duration::from_secs_f32(1.0 / configure.fps.max(1) as f32);
+                        let started = Instant::now().checked_sub(frame).unwrap_or(started);
+                        *scene.lock().unwrap() = Some((started, configure.width, configure.height));
+                    }
+                    frames_sent += 1;
                     frames.fetch_add(1, Ordering::Relaxed);
                     bytes.fetch_add(finished.data.len() as u32, Ordering::Relaxed);
                     let sent = send(

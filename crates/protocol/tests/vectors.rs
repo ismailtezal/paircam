@@ -11,8 +11,9 @@ use std::path::PathBuf;
 
 use bytes::Bytes;
 use paircam_protocol::{
-    CameraHandshake, Codec, ControlValues, DeviceId, Hello, HostHandshake, Message, Mode, Opener,
-    PairingKey, Sealer, SessionKeys, UNPAIRED, VideoConfig, VideoFrame,
+    CameraHandshake, Capabilities, Codec, ControlCapabilities, ControlValues, DeviceId, Gesture,
+    GestureKind, GesturePhase, Hello, HostHandshake, Message, Mode, Opener, PairingKey, Rect,
+    Sealer, SessionKeys, Subject, UNPAIRED, VideoConfig, VideoFrame,
 };
 use serde_json::{Value, json};
 
@@ -129,6 +130,51 @@ fn messages() -> Value {
                 zoom: Some(2.0),
                 torch: Some(true),
                 ..Default::default()
+            }),
+        ),
+        (
+            "controlTracking",
+            Message::Control(ControlValues {
+                face_tracking: Some(true),
+                gestures: Some(false),
+                ..Default::default()
+            }),
+        ),
+        (
+            "capabilitiesTracking",
+            Message::Capabilities(Capabilities {
+                controls: ControlCapabilities {
+                    face_tracking: true,
+                    gestures: vec![GestureKind::Palm, GestureKind::Frame, GestureKind::Spread],
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        ),
+        (
+            "subject",
+            Message::Subject(Subject {
+                face: Some(Rect {
+                    x: 0.375,
+                    y: 0.25,
+                    width: 0.1875,
+                    height: 0.25,
+                }),
+            }),
+        ),
+        ("subjectNone", Message::Subject(Subject { face: None })),
+        (
+            "gesture",
+            Message::Gesture(Gesture {
+                kind: GestureKind::Palm,
+                phase: GesturePhase::Recognised,
+            }),
+        ),
+        (
+            "gestureBegan",
+            Message::Gesture(Gesture {
+                kind: GestureKind::Spread,
+                phase: GesturePhase::Began,
             }),
         ),
     ];

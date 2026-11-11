@@ -383,42 +383,66 @@ fn field_label(label: SharedString, cx: &App) -> Div {
 }
 
 /// A label above a control.
-fn field(label: SharedString, cx: &App) -> Div {
+pub(crate) fn field(label: SharedString, cx: &App) -> Div {
     div().v_flex().gap_1p5().child(field_label(label, cx))
 }
 
-/// A label and its current value above a control.
-fn valued_field(label: SharedString, value: String, cx: &App) -> Div {
+/// A label and its current number above a control. Numbers use the mono font so they do not
+/// jitter as they change.
+pub(crate) fn valued_field(label: SharedString, value: String, cx: &App) -> Div {
+    labelled_value(
+        label,
+        div()
+            .font_family(cx.theme().mono_font_family.clone())
+            .child(SharedString::from(value)),
+        cx,
+    )
+}
+
+/// A label and its current setting, in words, above a control.
+pub(crate) fn worded_field(label: SharedString, value: SharedString, cx: &App) -> Div {
+    labelled_value(label, div().child(value), cx)
+}
+
+fn labelled_value(label: SharedString, value: Div, cx: &App) -> Div {
     div().v_flex().gap_2().child(
         div()
             .h_flex()
             .justify_between()
             .child(field_label(label, cx))
-            .child(
-                div()
-                    .font_family(cx.theme().mono_font_family.clone())
-                    .text_size(px(font::size::SM))
-                    .child(SharedString::from(value)),
-            ),
+            .child(value.text_size(px(font::size::SM))),
     )
 }
 
-/// A label with a switch on the right.
-fn toggle(
+/// A label with a switch on the right that changes a camera control.
+pub(crate) fn toggle(
     id: &'static str,
     label: SharedString,
     on: bool,
     apply: fn(bool) -> ControlValues,
     cx: &mut Context<PairCamApp>,
-) -> impl IntoElement {
+) -> Div {
+    switch_row(id, label, on, cx, move |this, checked, cx| {
+        this.set_control(apply(checked), cx);
+    })
+}
+
+/// A label with a switch on the right.
+pub(crate) fn switch_row(
+    id: &'static str,
+    label: SharedString,
+    on: bool,
+    cx: &mut Context<PairCamApp>,
+    changed: impl Fn(&mut PairCamApp, bool, &mut Context<PairCamApp>) + 'static,
+) -> Div {
     div()
         .h_flex()
         .items_center()
         .justify_between()
         .child(div().text_size(px(font::size::BASE)).child(label))
-        .child(Switch::new(id).small().checked(on).on_change(cx.listener(
-            move |this, checked: &bool, _, cx| {
-                this.set_control(apply(*checked), cx);
-            },
-        )))
+        .child(
+            Switch::new(id).small().checked(on).on_change(
+                cx.listener(move |this, checked: &bool, _, cx| changed(this, *checked, cx)),
+            ),
+        )
 }

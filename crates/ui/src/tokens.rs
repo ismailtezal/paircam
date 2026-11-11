@@ -172,6 +172,7 @@ pub mod motion {
         pub const FAST: u64 = 150;
         pub const BASE: u64 = 220;
         pub const SLOW: u64 = 350;
+        pub const NOTICE: u64 = 1600;
     }
 
     /// Cubic bezier control points.

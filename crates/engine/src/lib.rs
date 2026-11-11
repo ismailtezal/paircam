@@ -1,20 +1,26 @@
 //! The PairCam desktop engine.
 //!
-//! It connects to a phone, pairs or resumes, receives and decodes the video, and hands pictures
-//! to the preview and to a [`FrameSink`] (the virtual camera). It runs on its own threads and
-//! talks to the interface through two channels: [`Event`]s and the latest [`PreviewFrame`].
+//! It connects to a phone, pairs or resumes, receives and decodes the video, adjusts each
+//! picture as the user asked (crop, zoom, rotation, mirror, face tracking; see [`picture`]),
+//! and hands the result to the preview and to a [`FrameSink`] (the virtual camera). It runs on
+//! its own threads and talks to the interface through channels: [`Event`]s, the latest
+//! [`PreviewFrame`], and the [`PictureSettings`] whenever they change.
 
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_channel::{Receiver, Sender};
 pub use paircam_protocol as protocol;
-use paircam_protocol::{Capabilities, Codec, ControlValues, DeviceId, LogEntry, Message, Stats};
+use paircam_protocol::{
+    Capabilities, Codec, ControlValues, DeviceId, Gesture, LogEntry, Message, Stats,
+};
 
 pub mod decoder;
 pub mod discovery;
+pub mod picture;
+mod pipeline;
 mod session;
 mod store;
 #[cfg(windows)]
@@ -22,6 +28,7 @@ pub mod vcam;
 
 pub use decoder::Nv12Frame;
 pub use discovery::DiscoveredCamera;
+pub use picture::{FitMode, PictureSettings, Rotation};
 pub use store::{PairedCamera, StreamPreferences};
 #[cfg(windows)]
 pub use vcam::{VirtualCamera, VirtualCameraSink};
@@ -82,6 +89,8 @@ pub struct LinkStats {
     pub decode_ms: f32,
     /// Round trip of the last ping, in milliseconds.
     pub round_trip_ms: Option<f32>,
+    /// Average time to crop, scale, turn and mirror one picture, in milliseconds.
+    pub transform_ms: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -97,18 +106,35 @@ pub enum Event {
     CameraStats(Stats),
     /// A log line forwarded from the phone.
     CameraLog(LogEntry),
+    /// The phone recognised a hand gesture and acted on it.
+    Gesture(Gesture),
 }
 
-/// A picture for the preview: tightly packed BGRA, already scaled down.
+/// A picture for the preview: tightly packed BGRA, already scaled down. It has the camera
+/// frame's 16:9 shape and shows exactly what other apps get, bars included.
 pub struct PreviewFrame {
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
 }
 
-/// Receives every decoded picture at full size. The virtual camera implements this.
+/// A finished camera picture: what other apps see.
+pub struct CameraFrame<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub timestamp_us: u64,
+    /// Tightly packed NV12: `width * height` bytes of luma, then the interleaved chroma.
+    pub nv12: &'a [u8],
+}
+
+/// Receives every finished camera picture, [`picture::OUTPUT_WIDTH`] by
+/// [`picture::OUTPUT_HEIGHT`]. The virtual camera implements this.
 pub trait FrameSink: Send {
-    fn frame(&mut self, frame: &Nv12Frame<'_>);
+    /// Whether anyone takes pictures right now. While false, the engine does not make camera
+    /// pictures at all, only the smaller preview.
+    fn wants_frames(&self) -> bool;
+
+    fn frame(&mut self, frame: &CameraFrame<'_>);
 
     /// The stream ended; show the placeholder again.
     fn stopped(&mut self);
@@ -123,11 +149,11 @@ pub struct Channels {
 
 pub(crate) struct Inner {
     pub(crate) events: Sender<Event>,
-    pub(crate) preview: Sender<PreviewFrame>,
     pub(crate) store: Mutex<store::Store>,
-    pub(crate) sink: Mutex<Option<Box<dyn FrameSink>>>,
+    pub(crate) pipeline: pipeline::Pipeline,
     pub(crate) host_name: String,
-    pub(crate) preview_max_width: AtomicU32,
+    /// Everyone who asked to hear about picture setting changes.
+    picture_watchers: Mutex<Vec<Sender<PictureSettings>>>,
     session: Mutex<Option<Arc<session::Shared>>>,
     next_session_id: AtomicU64,
     /// Kept alive so the search for phones runs as long as the engine does.
@@ -150,6 +176,10 @@ impl Inner {
             .as_ref()
             .is_some_and(|session| session.id == id)
     }
+
+    fn announce_picture(&self, settings: PictureSettings) {
+        lock(&self.picture_watchers).retain(|watcher| watcher.try_send(settings).is_ok());
+    }
 }
 
 #[derive(Clone)]
@@ -168,13 +198,14 @@ impl Engine {
             discovery::Discovery::start(paircam_protocol::SERVICE_TYPE, move |cameras| {
                 let _ = discovered.try_send(Event::Discovered(cameras));
             });
+        let store = store::Store::open(data_directory);
+        let pipeline = pipeline::Pipeline::new(preview, *store.picture());
         let inner = Arc::new(Inner {
             events,
-            preview,
-            store: Mutex::new(store::Store::open(data_directory)),
-            sink: Mutex::new(None),
+            store: Mutex::new(store),
+            pipeline,
             host_name: host_name.into(),
-            preview_max_width: AtomicU32::new(1280),
+            picture_watchers: Mutex::new(Vec::new()),
             session: Mutex::new(None),
             next_session_id: AtomicU64::new(1),
             _discovery: discovery,
@@ -193,16 +224,51 @@ impl Engine {
         lock(&self.inner.store).host_id()
     }
 
-    /// Sends every decoded picture to `sink`.
+    /// Sends every finished camera picture to `sink`.
     pub fn set_frame_sink(&self, sink: Box<dyn FrameSink>) {
-        *lock(&self.inner.sink) = Some(sink);
+        self.inner.pipeline.set_sink(sink);
     }
 
     /// The widest preview picture to produce, in pixels. Larger streams are scaled down.
     pub fn set_preview_max_width(&self, width: u32) {
-        self.inner
-            .preview_max_width
-            .store(width.max(160), Ordering::Relaxed);
+        self.inner.pipeline.set_preview_max_width(width.max(160));
+    }
+
+    /// How the picture is adjusted before other apps see it.
+    pub fn picture(&self) -> PictureSettings {
+        self.inner.pipeline.settings()
+    }
+
+    /// Changes the picture adjustments, saves them and tells every watcher. Zoom and pan
+    /// changes ease into place.
+    pub fn set_picture(&self, settings: PictureSettings) {
+        let settings = settings.normalized();
+        if settings == self.picture() {
+            return;
+        }
+        self.inner.pipeline.set_settings(settings);
+        lock(&self.inner.store).set_picture(settings);
+        self.inner.announce_picture(settings);
+    }
+
+    /// Moves the zoomed view while the user drags it, by `dx` and `dy` as fractions of the
+    /// frame. The picture follows the pointer exactly. Call [`Engine::end_pan`] on release.
+    pub fn pan_picture(&self, dx: f32, dy: f32) {
+        let settings = self.inner.pipeline.pan(dx, dy);
+        self.inner.announce_picture(settings);
+    }
+
+    /// The drag ended: saves where the view was left.
+    pub fn end_pan(&self) {
+        self.inner.pipeline.end_pan();
+        lock(&self.inner.store).set_picture(self.picture());
+    }
+
+    /// Hears about every change to the picture settings, whoever made it.
+    pub fn watch_picture(&self) -> Receiver<PictureSettings> {
+        let (sender, receiver) = async_channel::unbounded();
+        lock(&self.inner.picture_watchers).push(sender);
+        receiver
     }
 
     /// Connects to the phone at `address`, replacing any current connection. Progress arrives
@@ -237,6 +303,10 @@ impl Engine {
 
     /// Changes one or more camera controls.
     pub fn control(&self, values: ControlValues) {
+        if values.face_tracking == Some(false) {
+            // Ease back right away instead of waiting for the phone to confirm.
+            self.inner.pipeline.set_tracking(false);
+        }
         self.send(&Message::Control(values));
     }
 

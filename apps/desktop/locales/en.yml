@@ -78,6 +78,36 @@ inspector:
   focus_lock: Lock focus
   white_balance_lock: Lock white balance
 
+picture:
+  title: PICTURE
+  reset: Reset
+  zoom: Digital zoom
+  rotation: Rotation
+  degrees: "%{degrees}°"
+  fit: Fill the frame
+  fit_fit: Fit
+  fit_fill: Fill
+  fit_stretch: Stretch
+  mirror: Mirror
+  flip: Flip upside down
+
+tracking:
+  title: TRACKING
+  face: Face tracking
+  framing: Framing
+  framing_wide: Wide
+  framing_medium: Medium
+  framing_close: Close
+  gestures: Hand gestures
+  gesture_palm: "Open palm: face tracking on or off"
+  gesture_frame: "L shape with thumb and finger: zoom to 2× and back"
+  gesture_spread: "Two hands apart or together: zoom in or out"
+
+gesture:
+  palm: Open palm
+  frame: Frame
+  spread: Two-hand zoom
+
 quality:
   low: "Low · 6 Mbps"
   medium: "Medium · 12 Mbps"

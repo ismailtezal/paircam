@@ -62,9 +62,15 @@ The whole desktop app is Rust in one process: interface, engine and the feed to 
 - **Discovery:** the phone advertises itself with Bonjour and the engine finds it through the
   DNS-SD client built into Windows. The desktop always opens the connection, so Windows never
   shows a firewall prompt.
-- **Preview:** the engine scales each decoded picture to the preview size as BGRA (at most 30 a
-  second) and the window turns it into a GPUI render image. The virtual camera gets every
-  picture at full size, separately, so the preview never limits what other apps receive.
+- **Picture transform:** one place turns each decoded picture into what other apps see. The
+  decoding thread only copies the picture; a picture thread asks the framer for this frame's
+  crop (the user's zoom and pan, or the face tracking framing, eased with a critically damped
+  spring) and the C layer crops, scales, turns, mirrors and flips it in one pass into the
+  1920x1080 camera frame, fitted, filled or stretched. The settings are kept per computer.
+- **Preview:** the same plan, scaled to the preview size as BGRA (up to 60 a second), so the
+  preview shows exactly what other apps get. While an app uses the camera, the preview is
+  scaled down from the camera frame itself; otherwise the transform renders straight at the
+  preview size. The virtual camera gets every picture regardless of the preview.
 - **Virtual camera (C++):** a Media Foundation source registered once, with administrator
   rights, by the installer. Windows loads it into its own camera service, so it must live in a
   folder that service can read (Program Files). The engine feeds it over a named pipe or shared

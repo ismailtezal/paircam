@@ -1,5 +1,5 @@
-//! What the desktop remembers between runs: its own identity, paired cameras and stream
-//! preferences. Stored as JSON in the app data folder; pairing keys are encrypted for the
+//! What the desktop remembers between runs: its own identity, paired cameras, stream
+//! preferences and picture adjustments. Stored as JSON in the app data folder; pairing keys are encrypted for the
 //! current Windows user before they touch the disk.
 
 use std::fs;
@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use paircam_protocol::{Codec, DeviceId, PairingKey};
 use serde::{Deserialize, Serialize};
+
+use crate::picture::PictureSettings;
 
 /// A camera this computer has paired with.
 #[derive(Clone, Debug, PartialEq)]
@@ -51,6 +53,8 @@ struct StoredFile {
     host_id: String,
     cameras: Vec<StoredCamera>,
     preferences: StreamPreferences,
+    /// Picture adjustments belong to this computer, whichever phone is connected.
+    picture: PictureSettings,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -105,6 +109,17 @@ impl Store {
     pub fn set_preferences(&mut self, preferences: StreamPreferences) {
         if self.file.preferences != preferences {
             self.file.preferences = preferences;
+            self.save();
+        }
+    }
+
+    pub fn picture(&self) -> &PictureSettings {
+        &self.file.picture
+    }
+
+    pub fn set_picture(&mut self, picture: PictureSettings) {
+        if self.file.picture != picture {
+            self.file.picture = picture;
             self.save();
         }
     }
@@ -322,6 +337,19 @@ mod tests {
 
         store.forget(camera_id);
         assert_eq!(store.pairing_key(camera_id), None);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn keeps_the_picture_settings_across_runs() {
+        let directory = temp_dir("picture");
+        let settings = PictureSettings {
+            mirror: true,
+            zoom: 2.0,
+            ..Default::default()
+        };
+        Store::open(&directory).set_picture(settings);
+        assert_eq!(*Store::open(&directory).picture(), settings);
         let _ = fs::remove_dir_all(&directory);
     }
 

@@ -17,8 +17,9 @@ pub use handshake::{
 };
 pub use message::{
     Bye, CameraInfo, Capabilities, Codec, Configure, ControlCapabilities, ControlValues, FocusMode,
-    Format, Hello, Lens, LogEntry, LogLevel, Message, PairResult, Point, Position, Range,
-    Stabilization, Stats, Thermal, VideoConfig, VideoFrame, WhiteBalanceMode,
+    Format, Gesture, GestureKind, GesturePhase, Hello, Lens, LogEntry, LogLevel, Message,
+    PairResult, Point, Position, Range, Rect, Stabilization, Stats, Subject, Thermal, VideoConfig,
+    VideoFrame, WhiteBalanceMode,
 };
 pub use record::{MAX_RECORD_LEN, read_record, write_record};
 
