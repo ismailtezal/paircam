@@ -322,5 +322,13 @@ impl Render for SettingsView {
                     )
                     .child(muted(text!("settings.licence"))),
             )
+            .child(
+                div().child(
+                    Button::new("quit")
+                        .small()
+                        .label(text!("settings.quit"))
+                        .on_click(|_, _, cx| cx.quit()),
+                ),
+            )
     }
 }

@@ -139,6 +139,7 @@ settings:
   about: HAKKINDA
   version: "PairCam %{version}"
   licence: MIT lisansıyla özgür ve açık kaynak.
+  quit: PairCam’den çık
 
 camera:
   not_installed: PairCam kamerası henüz kurulmadı; diğer uygulamalar telefonunu göremez.

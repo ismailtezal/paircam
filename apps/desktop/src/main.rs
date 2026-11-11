@@ -133,6 +133,12 @@ fn main() {
 
             gpui_kit::open_window(window_options, cx, |window, cx| {
                 window.set_window_title("PairCam");
+                // The close button only minimizes: PairCam has to keep running for other apps to
+                // see the camera. Quitting is in the settings sheet.
+                window.on_window_should_close(cx, |window, _| {
+                    window.minimize_window();
+                    false
+                });
                 if options.light {
                     paircam_ui::set_mode(gpui_kit::component::ThemeMode::Light, cx);
                 } else {
