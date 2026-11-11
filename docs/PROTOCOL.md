@@ -126,6 +126,8 @@ so newer apps can add both without breaking older ones.
 | 0x12 | requestKeyframe | host → camera | empty |
 | 0x20 | control | host → camera | JSON: one control change |
 | 0x21 | controlState | camera → host | JSON: current value of every control |
+| 0x22 | subject | camera → host | JSON: where the person is in the picture, while face tracking is on |
+| 0x23 | gesture | camera → host | JSON: a hand gesture the camera recognised |
 | 0x30 | stats | camera → host | JSON, about once a second while streaming |
 | 0x31 | log | camera → host | JSON: `level`, `tag`, `message` |
 | 0x3E | ping | both | `u64` sender timestamp in microseconds |
@@ -239,6 +241,54 @@ This is the layout the phone's hardware encoder produces, so frames are sent wit
 ```
 
 `thermal` is `nominal`, `fair`, `serious` or `critical`.
+
+### Face tracking and hand gestures
+
+Both are off unless the host or the user turns them on. They are announced in `capabilities`
+and switched in `control`, like every other control:
+
+```json
+"controls": { "faceTracking": true, "gestures": ["palm", "frame", "spread"] }
+```
+
+```json
+{ "faceTracking": true }
+{ "gestures": true }
+```
+
+`controlState` reports both as booleans. A camera that supports neither omits them.
+
+**Face tracking.** The camera only finds the person; the host does the framing, because the
+host is where the picture is cropped for other apps. While `faceTracking` is on, the camera
+sends `subject` up to 15 times a second:
+
+```json
+{ "face": { "x": 0.41, "y": 0.22, "width": 0.18, "height": 0.24 } }
+{ "face": null }
+```
+
+The rectangle is the face in the encoded picture, with the origin at the top left and both axes
+from 0 to 1. `null` means nobody is in view. The host moves its crop smoothly; the camera sends
+raw detections and does no smoothing of its own.
+
+**Gestures.** While `gestures` is on, the camera watches for hand gestures in its own video and
+acts on them itself, then tells the host so the interface can show what happened:
+
+| Gesture | Meaning | What the camera does |
+| --- | --- | --- |
+| `palm` | An open palm held up for about a second | Toggles `faceTracking` and sends `controlState` |
+| `frame` | Thumb and index finger in an L shape, held for about a second | Zooms smoothly to 2× or, if already zoomed in, back to 1× |
+| `spread` | Two hands moving apart or together | Zooms in or out continuously while the hands move |
+
+```json
+{ "kind": "palm", "phase": "recognised" }
+{ "kind": "spread", "phase": "began" }
+{ "kind": "spread", "phase": "ended" }
+```
+
+`phase` is `recognised` for a one-off gesture, and `began` then `ended` for a continuous one.
+Zoom changes always ramp smoothly on the camera, whether they come from a gesture or from the
+host, and the camera reports the new value in `controlState` when the ramp settles.
 
 ## Flow control
 
