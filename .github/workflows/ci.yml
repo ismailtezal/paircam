@@ -41,3 +41,36 @@ jobs:
       - name: Build and test the virtual camera
         shell: pwsh
         run: ./native/vcam/build.ps1 -Test
+
+  phone-protocol:
+    name: Phone protocol (Swift)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test vectors match the Rust implementation's
+        run: cmp protocol/vectors/v0.json apps/mobile/modules/camera-engine/tests/PairCamProtocolTests/Resources/v0.json
+
+      - name: Test
+        working-directory: apps/mobile/modules/camera-engine
+        run: swift test
+
+  phone-app:
+    name: Phone app (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx expo lint
+      - run: node scripts/check-i18n.mjs

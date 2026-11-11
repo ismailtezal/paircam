@@ -3,40 +3,51 @@
 Each phase ends in something that can be used or shown. The first target is the iPhone app with
 the Windows 11 desktop app; Android comes after that is solid.
 
+A box is ticked only when the thing has been seen working. "Written" means the code exists and
+passes the checks that can run on Windows, but has not run on a real device yet.
+
 ## Phase 0: foundation
 
-- [x] Repository, licence, working rules, architecture, design direction and protocol drafts
-- [ ] Toolchain on the development PC: Windows 11 SDK, Expo and EAS accounts linked to the Apple
-      Developer account (Rust is installed)
-- [ ] Workspace tooling: Cargo workspace, TypeScript, lint, format, CI
-- [ ] Design tokens and the generated desktop (GPUI Kit) and phone themes
-- [ ] Desktop component gallery in both themes, approved before any screen is built
-- [ ] Translation catalogs (English source, device language, Turkish as the first translation) in both apps
-- [ ] Virtual camera spike: a test pattern visible as "PairCam" in Zoom, Teams, Meet (Chrome),
-      Discord and OBS
-- [ ] Preview spike: live video drawn smoothly in a GPUI window on Windows
-- [ ] Phone build pipeline: EAS Build to TestFlight, with an empty app installed on a real iPhone
-- [ ] Remote diagnostics: phone logs and stats visible in the desktop app
+- [x] Repository, licence, working rules, architecture, design direction and protocol
+- [x] Toolchain on the development PC: Rust, Windows 11 SDK, pinned FFmpeg
+- [x] Workspace tooling: Cargo workspace, lint, format, CI workflow
+- [x] Design tokens and the generated desktop (GPUI Kit) and phone themes
+- [x] Desktop component gallery in both themes (`paircam --gallery`)
+- [x] Translation catalogs (English source, device language, Turkish) in both apps
+- [x] Preview spike: live video drawn smoothly in a GPUI window on Windows
+- [x] A phone simulator, so the desktop can be built and tested without an iPhone
+- [ ] Virtual camera seen in Zoom, Teams, Meet (Chrome), Discord and OBS. Written and tested
+      with a harness; needs the one-time install with administrator rights, then real apps.
+- [ ] Phone build pipeline: EAS Build to TestFlight on a real iPhone. Configured; needs the
+      Expo and Apple accounts linked.
+- [ ] Remote diagnostics: phone logs and stats visible in the desktop app. Phone stats are shown
+      and phone log lines are saved to `phone.log` in the app data folder; there is no log viewer
+      in the interface yet.
 
 ## Phase 1: first video
 
-- [ ] iOS camera engine: 1080p at 30 fps, HEVC
-- [ ] Desktop engine: receive, GPU decode, feed the virtual camera
-- [ ] QR pairing and automatic reconnect
-- [ ] Live preview and connection state in the desktop app
-- [ ] Placeholder image in the camera when no phone is connected
+- [x] Desktop engine: discover, pair, receive, GPU decode, feed the virtual camera
+- [x] Pairing with a 6-digit code and automatic reconnect to paired phones
+- [x] Live preview, stats and connection state in the desktop app
+- [ ] Placeholder picture in the camera when no phone is connected. Written; drawn correctly in
+      the test harness, not yet seen in a real app.
+- [ ] iOS camera engine: 1080p at 30 fps, HEVC. Written; not yet compiled or run.
+- [ ] The first stream from a real iPhone to a real app
 
 ## Phase 2: quality
 
-- [ ] 4K and 60 fps, bitrate and quality controls
-- [ ] All lenses, zoom, focus, exposure and white-balance control from the desktop
+- [ ] 4K and 60 fps end to end (the desktop and protocol already carry them; the virtual camera
+      is 1080p at 30 fps for now)
+- [x] Camera, resolution, frame rate, quality and format chosen from the desktop
+- [x] Zoom, exposure, flashlight, focus lock and white-balance lock from the desktop
 - [ ] Stabilization, HDR, low-light handling
-- [ ] Heat and battery protection: gradual quality reduction, dimmed screen
+- [ ] Heat and battery protection: gradual quality reduction
 - [ ] Delay and smoothness measured and tuned against DroidCam, Camo and Iriun
 
 ## Phase 3: product
 
-- [ ] Custom title bar, tray, start with Windows
+- [x] Custom title bar
+- [ ] Tray icon, start with Windows
 - [ ] Installer that registers the camera, signed builds, silent auto-update
 - [ ] USB connection
 - [ ] App Store release

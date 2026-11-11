@@ -196,6 +196,11 @@ u32  length
 ...  decoder configuration record: `avcC` for H.264, `hvcC` for HEVC
 ```
 
+In version 0 the camera rotates and mirrors the picture itself, so the encoded frames are
+already upright: it always sends `rotation` 0 and the mirror flag clear, with the width and
+height as encoded, and the host ignores both fields. When the phone turns, the camera restarts
+its encoder and sends a new `videoConfig` followed by a keyframe.
+
 ### videoFrame
 
 ```
@@ -240,4 +245,16 @@ This is the layout the phone's hardware encoder produces, so frames are sent wit
 The sender tracks bytes queued but not yet written. Above a threshold it stops queueing video,
 drops frames until the next keyframe, and counts the drops in `stats`. If the peer reads nothing
 for five seconds, the connection is closed. Either side may send `ping` at any time; a peer that
-does not answer within five seconds is treated as gone.
+does not answer within five seconds is treated as gone. The host pings every second and the
+camera every two, so both must answer `ping` with `pong`.
+
+## Ending a session
+
+`bye` carries a `reason`. The camera uses `stopped` (the user tapped Stop), `declined`,
+`pairingTimedOut`, `backgrounded` (the app left the foreground, which stops the camera on iOS)
+and `forgotten` (the user removed this computer). The host uses `closed by the user`. After
+`stopped` the host does not reconnect by itself. Unknown reasons are treated as a plain close.
+
+The camera serves one host at a time and answers others with status 3 (busy). A host that
+reconnects right after a dropped connection can get busy for up to five seconds, until the
+camera gives up on the old connection.
