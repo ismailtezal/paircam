@@ -175,6 +175,18 @@ final class VectorTests: XCTestCase {
                 Hello(name: "Test iPhone", appVersion: "0.1.0", platform: "ios", model: "iPhone16,2")
             ),
             "control": .control(ControlValues(zoom: 2.0, torch: true)),
+            "controlTracking": .control(ControlValues(faceTracking: true, gestures: false)),
+            "capabilitiesTracking": .capabilities(
+                Capabilities(
+                    controls: ControlCapabilities(faceTracking: true, gestures: [.palm, .frame, .spread])
+                )
+            ),
+            "subject": .subject(
+                SubjectUpdate(face: PictureRect(x: 0.375, y: 0.25, width: 0.1875, height: 0.25))
+            ),
+            "subjectNone": .subject(SubjectUpdate(face: nil)),
+            "gesture": .gesture(GestureEvent(kind: .palm, phase: .recognised)),
+            "gestureBegan": .gesture(GestureEvent(kind: .spread, phase: .began)),
         ]
 
         let loose = try loadVectors().messages.filter { !$0.exact }

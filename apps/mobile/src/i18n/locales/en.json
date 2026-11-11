@@ -101,6 +101,16 @@
       "unknown": "Unknown"
     }
   },
+  "vision": {
+    "tracking": "Tracking",
+    "trackingLabel": "Face tracking is on",
+    "gestureAnnouncement": "Gesture recognised: {{gesture}}",
+    "gesture": {
+      "palm": "Open palm",
+      "frame": "L shape",
+      "spread": "Two hands"
+    }
+  },
   "settings": {
     "title": "Settings",
     "pairedComputers": {
@@ -112,6 +122,29 @@
       "forgetLabel": "Forget {{host}}",
       "forgetTitle": "Forget {{host}}?",
       "forgetBody": "This computer will have to pair again before it can use this iPhone."
+    },
+    "handsFree": {
+      "title": "Hands-free",
+      "faceTracking": "Face tracking",
+      "faceTrackingHint": "Your computer keeps you centred in the picture.",
+      "gestures": "Hand gestures",
+      "gesturesHint": "Control the camera with the gestures below.",
+      "footer": "Both start with every session. Your computer can turn them on or off too."
+    },
+    "gestures": {
+      "title": "Gestures",
+      "palm": {
+        "title": "Open palm",
+        "body": "Hold an open hand up for a second to turn face tracking on or off."
+      },
+      "frame": {
+        "title": "L shape",
+        "body": "Hold your thumb and index finger in an L for a second to zoom to 2× and back."
+      },
+      "spread": {
+        "title": "Two hands",
+        "body": "Move two open hands apart to zoom in, or together to zoom out."
+      }
     },
     "preferences": {
       "title": "Preferences"

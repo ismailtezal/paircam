@@ -8,6 +8,7 @@ public final class CameraEngineModule: Module {
     private static let environmentEvent = "onEnvironmentChange"
     private static let statsEvent = "onStats"
     private static let disconnectEvent = "onDisconnect"
+    private static let gestureEvent = "onGesture"
 
     public func definition() -> ModuleDefinition {
         Name("CameraEngine")
@@ -16,7 +17,8 @@ public final class CameraEngineModule: Module {
             CameraEngineModule.stateEvent,
             CameraEngineModule.environmentEvent,
             CameraEngineModule.statsEvent,
-            CameraEngineModule.disconnectEvent
+            CameraEngineModule.disconnectEvent,
+            CameraEngineModule.gestureEvent
         )
 
         OnCreate {
@@ -32,6 +34,9 @@ public final class CameraEngineModule: Module {
             }
             callbacks.onDisconnect = { [weak self] event in
                 self?.sendEvent(CameraEngineModule.disconnectEvent, event)
+            }
+            callbacks.onGesture = { [weak self] event in
+                self?.sendEvent(CameraEngineModule.gestureEvent, event)
             }
             CameraEngine.shared.callbacks = callbacks
         }
@@ -62,6 +67,14 @@ public final class CameraEngineModule: Module {
 
         AsyncFunction("disconnect") {
             CameraEngine.shared.disconnect()
+        }
+
+        AsyncFunction("setFaceTracking") { (enabled: Bool) in
+            CameraEngine.shared.setVisionPreferences(faceTracking: enabled, gestures: nil)
+        }
+
+        AsyncFunction("setGestures") { (enabled: Bool) in
+            CameraEngine.shared.setVisionPreferences(faceTracking: nil, gestures: enabled)
         }
 
         AsyncFunction("getPairedHosts") { (promise: Promise) in

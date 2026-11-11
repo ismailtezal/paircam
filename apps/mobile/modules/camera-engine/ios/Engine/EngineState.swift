@@ -64,6 +64,10 @@ struct EngineEnvironment: Equatable {
     var deviceName = "iPhone"
     /// The TCP port the service listens on, or 0 while it is stopped.
     var port = 0
+    /// The camera is finding the person for the computer to frame. Only ever on in a session.
+    var faceTracking = false
+    /// The camera is watching for hand gestures. Only ever on in a session.
+    var gestures = false
 
     var dictionary: [String: Any] {
         [
@@ -73,6 +77,8 @@ struct EngineEnvironment: Equatable {
             "cameraInterrupted": cameraInterrupted,
             "deviceName": deviceName,
             "port": port,
+            "faceTracking": faceTracking,
+            "gestures": gestures,
         ]
     }
 

@@ -29,12 +29,13 @@ final class CameraEngine {
     private static let videoQueueSeconds = 0.25
 
     /// What the interface listens to. Set from the module's thread and called from the engine's,
-    /// so the four closures are kept together behind a lock.
+    /// so the closures are kept together behind a lock.
     struct Callbacks {
         var onStateChange: ((EngineState) -> Void)?
         var onEnvironmentChange: ((EngineEnvironment) -> Void)?
         var onStats: (([String: Any]) -> Void)?
         var onDisconnect: (([String: Any]) -> Void)?
+        var onGesture: (([String: Any]) -> Void)?
     }
 
     var callbacks: Callbacks {
@@ -76,6 +77,11 @@ final class CameraEngine {
     private var request = CaptureController.Request()
     private var ticker: DispatchSourceTimer?
     private var lastKeyframeRequest: TimeInterval = 0
+    /// What the user chose in the phone's settings, applied when a session starts.
+    private var preferredFaceTracking = false
+    private var preferredGestures = false
+    /// Whether the last `subject` had a face, so only changes are logged.
+    private var subjectInView = false
 
     private var windowStart = monotonicNow()
     private var windowFrames = 0
@@ -103,6 +109,21 @@ final class CameraEngine {
         capture.onInterruption = { [weak self] interrupted in
             self?.queue.async {
                 self?.updateEnvironment { $0.cameraInterrupted = interrupted }
+            }
+        }
+        capture.onControlsChange = { [weak self] controls in
+            self?.queue.async {
+                self?.handle(controlsChange: controls)
+            }
+        }
+        capture.onSubject = { [weak self] subject in
+            self?.queue.async {
+                self?.handle(subject: subject)
+            }
+        }
+        capture.onGesture = { [weak self] gesture in
+            self?.queue.async {
+                self?.handle(gesture: gesture)
             }
         }
 
@@ -234,6 +255,33 @@ final class CameraEngine {
                 }
             }
             completion()
+        }
+    }
+
+    /// The user's choice of face tracking and hand gestures in the phone's settings. `nil` leaves
+    /// a feature as it is. Saved for the next session, and applied at once to a session that is
+    /// already running.
+    func setVisionPreferences(faceTracking: Bool?, gestures: Bool?) {
+        queue.async {
+            if let faceTracking {
+                self.preferredFaceTracking = faceTracking
+            }
+            if let gestures {
+                self.preferredGestures = gestures
+            }
+            guard let session = self.active, session.isEstablished else {
+                return
+            }
+            self.capture.applyControl(ControlValues(faceTracking: faceTracking, gestures: gestures)) {
+                [weak self, weak session] controls in
+                self?.queue.async {
+                    guard let self, let session, session === self.active else {
+                        return
+                    }
+                    session.send(.controlState(controls))
+                    self.publishVision(controls)
+                }
+            }
         }
     }
 
@@ -369,6 +417,11 @@ final class CameraEngine {
                 session.send(.log(entry))
             }
         }
+        // The user's choices from the phone's settings, in place before the first controlState.
+        subjectInView = false
+        capture.applyControl(
+            ControlValues(faceTracking: preferredFaceTracking, gestures: preferredGestures)
+        ) { _ in }
         sendCapabilities(to: session)
     }
 
@@ -382,6 +435,7 @@ final class CameraEngine {
         capture.controlState { [weak self, weak session] controls in
             self?.queue.async {
                 session?.send(.controlState(controls))
+                self?.publishVision(controls)
             }
         }
     }
@@ -437,9 +491,16 @@ final class CameraEngine {
         case .requestKeyframe:
             capture.requestKeyframe()
         case .control(let values):
+            if let faceTracking = values.faceTracking {
+                EngineLog.shared.info("vision", "\(hostName) turned face tracking \(faceTracking ? "on" : "off")")
+            }
+            if let gestures = values.gestures {
+                EngineLog.shared.info("vision", "\(hostName) turned gestures \(gestures ? "on" : "off")")
+            }
             capture.applyControl(values) { [weak self, weak session] controls in
                 self?.queue.async {
                     session?.send(.controlState(controls))
+                    self?.publishVision(controls)
                 }
             }
         default:
@@ -498,6 +559,49 @@ final class CameraEngine {
         if session.needsKeyframe, now - lastKeyframeRequest > CameraEngine.keyframeRequestInterval {
             lastKeyframeRequest = now
             capture.requestKeyframe()
+        }
+    }
+
+    // MARK: - Face tracking and gestures
+
+    /// A gesture acted or a zoom ramp settled: the host hears the new state of every control.
+    private func handle(controlsChange controls: ControlValues) {
+        publishVision(controls)
+        guard let session = active, session.isEstablished else {
+            return
+        }
+        session.send(.controlState(controls))
+    }
+
+    private func handle(subject: SubjectUpdate) {
+        guard let session = active, session.isEstablished, environment.faceTracking else {
+            return
+        }
+        let inView = subject.face != nil
+        if inView != subjectInView {
+            subjectInView = inView
+            EngineLog.shared.info("vision", inView ? "face found" : "face lost")
+        }
+        session.send(.subject(subject))
+    }
+
+    private func handle(gesture: GestureEvent) {
+        guard let session = active, session.isEstablished else {
+            return
+        }
+        session.send(.gesture(gesture))
+        callbacks.onGesture?(["kind": gesture.kind.rawValue, "phase": gesture.phase.rawValue])
+    }
+
+    /// Keeps the interface's view of face tracking and gestures in step with the camera.
+    private func publishVision(_ controls: ControlValues) {
+        updateEnvironment {
+            if let faceTracking = controls.faceTracking {
+                $0.faceTracking = faceTracking
+            }
+            if let gestures = controls.gestures {
+                $0.gestures = gestures
+            }
         }
     }
 
@@ -644,6 +748,13 @@ extension CameraEngine: HostSessionDelegate {
         if isStreaming {
             isStreaming = false
             capture.stopEncoding()
+        }
+        // Face tracking and gestures belong to a session; the next one starts from the settings.
+        capture.applyControl(ControlValues(faceTracking: false, gestures: false)) { _ in }
+        subjectInView = false
+        updateEnvironment {
+            $0.faceTracking = false
+            $0.gestures = false
         }
         EngineLog.shared.detach()
         EngineLog.shared.info("engine", "session ended: \(reason)")

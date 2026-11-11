@@ -267,6 +267,17 @@ final class MessageTests: XCTestCase {
         try roundTrip(.control(ControlValues(zoom: 2)))
         try roundTrip(.controlState(ControlValues(zoom: 1, focus: .auto, exposureBias: 0, torch: false)))
         try roundTrip(
+            .controlState(ControlValues(zoom: 2, torch: false, faceTracking: true, gestures: false))
+        )
+        try roundTrip(.control(ControlValues(faceTracking: true)))
+        try roundTrip(.control(ControlValues(gestures: true)))
+        try roundTrip(.subject(SubjectUpdate(face: PictureRect(x: 0.41, y: 0.22, width: 0.18, height: 0.24))))
+        try roundTrip(.subject(SubjectUpdate(face: nil)))
+        try roundTrip(.gesture(GestureEvent(kind: .palm, phase: .recognised)))
+        try roundTrip(.gesture(GestureEvent(kind: .frame, phase: .recognised)))
+        try roundTrip(.gesture(GestureEvent(kind: .spread, phase: .began)))
+        try roundTrip(.gesture(GestureEvent(kind: .spread, phase: .ended)))
+        try roundTrip(
             .stats(
                 Stats(
                     fps: 29.97,
@@ -295,6 +306,74 @@ final class MessageTests: XCTestCase {
         let payload = Data([UInt8](message).dropFirst())
         let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
         XCTAssertEqual((object?["controls"] as? [String: Any])?.isEmpty, true)
+    }
+
+    func testCapabilitiesAnnounceFaceTrackingAndGestures() throws {
+        var controls = ControlCapabilities()
+        controls.faceTracking = true
+        controls.gestures = [.palm, .frame, .spread]
+        let message = try Message.capabilities(Capabilities(controls: controls)).encode()
+        let payload = Data([UInt8](message).dropFirst())
+        let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        let encoded = try XCTUnwrap(object?["controls"] as? [String: Any])
+        XCTAssertEqual(encoded["faceTracking"] as? Bool, true)
+        XCTAssertEqual(encoded["gestures"] as? [String], ["palm", "frame", "spread"])
+
+        var spec = Data([MessageKind.capabilities])
+        spec.append(Data(#"{"controls":{"faceTracking":true,"gestures":["palm","frame","spread","wave"]}}"#.utf8))
+        guard case .capabilities(let decoded) = try Message.decode(spec) else {
+            return XCTFail("expected capabilities")
+        }
+        XCTAssertTrue(decoded.controls.faceTracking)
+        XCTAssertEqual(decoded.controls.gestures, [.palm, .frame, .spread, .unknown])
+    }
+
+    func testControlCarriesFaceTrackingAndGesturesAsBooleans() throws {
+        let message = try Message.control(ControlValues(faceTracking: true)).encode()
+        let payload = String(decoding: [UInt8](message).dropFirst(), as: UTF8.self)
+        XCTAssertEqual(payload, #"{"faceTracking":true}"#)
+
+        var spec = Data([MessageKind.control])
+        spec.append(Data(#"{"gestures":true}"#.utf8))
+        XCTAssertEqual(try Message.decode(spec), .control(ControlValues(gestures: true)))
+
+        var older = Data([MessageKind.controlState])
+        older.append(Data(#"{"zoom":1.0}"#.utf8))
+        guard case .controlState(let state) = try Message.decode(older) else {
+            return XCTFail("expected controlState")
+        }
+        XCTAssertNil(state.faceTracking)
+        XCTAssertNil(state.gestures)
+    }
+
+    func testSubjectWritesAnExplicitNullWhenNobodyIsInView() throws {
+        let message = try Message.subject(SubjectUpdate(face: nil)).encode()
+        XCTAssertEqual(message.first, 0x22)
+        let payload = String(decoding: [UInt8](message).dropFirst(), as: UTF8.self)
+        XCTAssertEqual(payload, #"{"face":null}"#)
+
+        var spec = Data([MessageKind.subject])
+        spec.append(Data(#"{"face":{"x":0.41,"y":0.22,"width":0.18,"height":0.24}}"#.utf8))
+        XCTAssertEqual(
+            try Message.decode(spec),
+            .subject(SubjectUpdate(face: PictureRect(x: 0.41, y: 0.22, width: 0.18, height: 0.24)))
+        )
+
+        var missing = Data([MessageKind.subject])
+        missing.append(Data("{}".utf8))
+        XCTAssertEqual(try Message.decode(missing), .subject(SubjectUpdate(face: nil)))
+    }
+
+    func testGestureMatchesTheSpecification() throws {
+        let message = try Message.gesture(GestureEvent(kind: .palm, phase: .recognised)).encode()
+        XCTAssertEqual(message.first, 0x23)
+        let payload = Data([UInt8](message).dropFirst())
+        let object = try JSONSerialization.jsonObject(with: payload) as? [String: String]
+        XCTAssertEqual(object, ["kind": "palm", "phase": "recognised"])
+
+        var future = Data([MessageKind.gesture])
+        future.append(Data(#"{"kind":"wave","phase":"held","extra":1}"#.utf8))
+        XCTAssertEqual(try Message.decode(future), .gesture(GestureEvent(kind: .unknown, phase: .unknown)))
     }
 
     func testSkipsUnknownMessageTypes() throws {

@@ -8,16 +8,24 @@ import { Alert, View } from 'react-native';
 import { Button } from '@/components/ui/button';
 import { ListRow, ListSection } from '@/components/ui/list';
 import { ScreenScroll } from '@/components/ui/screen-scroll';
+import { Switch } from '@/components/ui/switch';
 import { Text } from '@/components/ui/text';
 import { engine, useEngine } from '@/engine/store';
 import { mediumDate } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
-import { usePreferences } from '@/lib/preferences';
+import { setFaceTracking, setGestures, usePreferences } from '@/lib/preferences';
+
+/** The gestures explained in Settings, in the order they are listed. */
+const GESTURES = ['palm', 'frame', 'spread'] as const;
+
+/** Explanations of the gestures may wrap; they are the whole manual. */
+const GESTURE_BODY_LINES = 3;
+const HINT_LINES = 2;
 
 export default function Settings() {
   const { t, i18n } = useTranslation();
   const router = useRouter();
-  const { language, appearance } = usePreferences();
+  const { language, appearance, faceTracking, gestures } = usePreferences();
   const [hosts, setHosts] = React.useState<PairedHost[] | null>(null);
 
   // The list changes when a computer pairs or a session ends, so it is read again whenever the
@@ -99,6 +107,44 @@ export default function Settings() {
             />
           ))
         )}
+      </ListSection>
+
+      <ListSection title={t('settings.handsFree.title')} footer={t('settings.handsFree.footer')}>
+        <ListRow
+          title={t('settings.handsFree.faceTracking')}
+          subtitle={t('settings.handsFree.faceTrackingHint')}
+          subtitleLines={HINT_LINES}
+          trailing={
+            <Switch
+              value={faceTracking}
+              onValueChange={setFaceTracking}
+              accessibilityLabel={t('settings.handsFree.faceTracking')}
+            />
+          }
+        />
+        <ListRow
+          title={t('settings.handsFree.gestures')}
+          subtitle={t('settings.handsFree.gesturesHint')}
+          subtitleLines={HINT_LINES}
+          trailing={
+            <Switch
+              value={gestures}
+              onValueChange={setGestures}
+              accessibilityLabel={t('settings.handsFree.gestures')}
+            />
+          }
+        />
+      </ListSection>
+
+      <ListSection title={t('settings.gestures.title')}>
+        {GESTURES.map((kind) => (
+          <ListRow
+            key={kind}
+            title={t(`settings.gestures.${kind}.title`)}
+            subtitle={t(`settings.gestures.${kind}.body`)}
+            subtitleLines={GESTURE_BODY_LINES}
+          />
+        ))}
       </ListSection>
 
       <ListSection title={t('settings.preferences.title')}>

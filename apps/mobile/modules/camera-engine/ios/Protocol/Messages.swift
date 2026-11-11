@@ -18,6 +18,8 @@ enum MessageKind {
     static let requestKeyframe: UInt8 = 0x12
     static let control: UInt8 = 0x20
     static let controlState: UInt8 = 0x21
+    static let subject: UInt8 = 0x22
+    static let gesture: UInt8 = 0x23
     static let stats: UInt8 = 0x30
     static let log: UInt8 = 0x31
     static let ping: UInt8 = 0x3E
@@ -38,6 +40,8 @@ enum Message: Equatable {
     case requestKeyframe
     case control(ControlValues)
     case controlState(ControlValues)
+    case subject(SubjectUpdate)
+    case gesture(GestureEvent)
     case stats(Stats)
     case log(LogEntry)
     case ping(UInt64)
@@ -71,6 +75,10 @@ enum Message: Equatable {
             return try Message.json(MessageKind.control, value)
         case .controlState(let value):
             return try Message.json(MessageKind.controlState, value)
+        case .subject(let value):
+            return try Message.json(MessageKind.subject, value)
+        case .gesture(let value):
+            return try Message.json(MessageKind.gesture, value)
         case .stats(let value):
             return try Message.json(MessageKind.stats, value)
         case .log(let value):
@@ -117,6 +125,10 @@ enum Message: Equatable {
             return .control(try parse("control", payload))
         case MessageKind.controlState:
             return .controlState(try parse("controlState", payload))
+        case MessageKind.subject:
+            return .subject(try parse("subject", payload))
+        case MessageKind.gesture:
+            return .gesture(try parse("gesture", payload))
         case MessageKind.stats:
             return .stats(try parse("stats", payload))
         case MessageKind.log:
@@ -398,6 +410,10 @@ struct ControlCapabilities: Equatable {
     var whiteBalance: [WhiteBalanceMode] = []
     var torch = false
     var stabilization: [StabilizationMode] = []
+    /// The camera can find the person and send `subject`.
+    var faceTracking = false
+    /// The hand gestures the camera recognises.
+    var gestures: [GestureKind] = []
 }
 
 extension ControlCapabilities: Codable {
@@ -408,6 +424,8 @@ extension ControlCapabilities: Codable {
         case whiteBalance
         case torch
         case stabilization
+        case faceTracking
+        case gestures
     }
 
     init(from decoder: Decoder) throws {
@@ -418,7 +436,9 @@ extension ControlCapabilities: Codable {
             focus: try container.decodeIfPresent([FocusMode].self, forKey: .focus) ?? [],
             whiteBalance: try container.decodeIfPresent([WhiteBalanceMode].self, forKey: .whiteBalance) ?? [],
             torch: try container.decodeIfPresent(Bool.self, forKey: .torch) ?? false,
-            stabilization: try container.decodeIfPresent([StabilizationMode].self, forKey: .stabilization) ?? []
+            stabilization: try container.decodeIfPresent([StabilizationMode].self, forKey: .stabilization) ?? [],
+            faceTracking: try container.decodeIfPresent(Bool.self, forKey: .faceTracking) ?? false,
+            gestures: try container.decodeIfPresent([GestureKind].self, forKey: .gestures) ?? []
         )
     }
 
@@ -437,6 +457,12 @@ extension ControlCapabilities: Codable {
         }
         if !stabilization.isEmpty {
             try container.encode(stabilization, forKey: .stabilization)
+        }
+        if faceTracking {
+            try container.encode(faceTracking, forKey: .faceTracking)
+        }
+        if !gestures.isEmpty {
+            try container.encode(gestures, forKey: .gestures)
         }
     }
 }
@@ -505,6 +531,79 @@ struct ControlValues: Codable, Equatable {
     var whiteBalance: WhiteBalanceMode?
     var torch: Bool?
     var stabilization: StabilizationMode?
+    /// The camera sends `subject` while this is on.
+    var faceTracking: Bool?
+    /// The camera watches for hand gestures while this is on.
+    var gestures: Bool?
+}
+
+// MARK: - Face tracking and hand gestures
+
+/// A rectangle in the encoded picture, with the origin at the top left and both axes from 0 to 1.
+struct PictureRect: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+}
+
+/// Where the person is in the picture. `face` is `nil` when nobody is in view, and is then
+/// written as an explicit `null`.
+struct SubjectUpdate: Equatable {
+    var face: PictureRect?
+}
+
+extension SubjectUpdate: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case face
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(face: try container.decodeIfPresent(PictureRect.self, forKey: .face))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let face {
+            try container.encode(face, forKey: .face)
+        } else {
+            try container.encodeNil(forKey: .face)
+        }
+    }
+}
+
+enum GestureKind: String, Codable, Equatable {
+    /// An open palm held up for about a second: toggles face tracking.
+    case palm
+    /// Thumb and index finger in an L shape, held for about a second: zooms to 2× or back to 1×.
+    case frame
+    /// Two hands moving apart or together: zooms continuously.
+    case spread
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        self = try decodeTolerant(decoder, fallback: .unknown)
+    }
+}
+
+enum GesturePhase: String, Codable, Equatable {
+    /// A one-off gesture fired.
+    case recognised
+    /// A continuous gesture started.
+    case began
+    /// A continuous gesture finished.
+    case ended
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        self = try decodeTolerant(decoder, fallback: .unknown)
+    }
+}
+
+struct GestureEvent: Codable, Equatable {
+    var kind: GestureKind
+    var phase: GesturePhase
 }
 
 enum ThermalLevel: String, Codable, Equatable {

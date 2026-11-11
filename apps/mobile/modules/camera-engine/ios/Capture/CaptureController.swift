@@ -46,7 +46,16 @@ final class CaptureController: NSObject {
     /// Posted on the main thread when the preview should follow a different camera.
     static let activeDeviceDidChange = Notification.Name("app.paircam.activeDeviceDidChange")
 
+    /// The highest zoom offered, as the user sees it (1× is the wide lens).
     private static let maxZoom: CGFloat = 10
+    /// Zoom ramp speeds, in doublings per second. A change from the desktop ramps at
+    /// `zoomRampRate`, the `frame` gesture a little slower so it reads as a deliberate move, and
+    /// `spread` faster so the picture keeps up with the hands.
+    private static let zoomRampRate: Float = 3
+    private static let frameZoomRampRate: Float = 2
+    private static let spreadZoomRampRate: Float = 6
+    /// How often a running zoom ramp is checked to see whether it has settled.
+    private static let zoomSettleCheckInterval: TimeInterval = 0.1
 
     let session = AVCaptureSession()
 
@@ -54,12 +63,20 @@ final class CaptureController: NSObject {
     var onEncodedFrame: ((VideoEncoder.Output) -> Void)?
     /// The camera was taken away (`true`) or given back (`false`). Any thread.
     var onInterruption: ((Bool) -> Void)?
+    /// The controls changed without a request from the desktop: a gesture acted, or a zoom ramp
+    /// settled. Carries the state of every control. Any thread.
+    var onControlsChange: ((ControlValues) -> Void)?
+    /// Where the person is, while face tracking is on. Any thread.
+    var onSubject: ((SubjectUpdate) -> Void)?
+    /// A hand gesture the camera recognised and acted on. Any thread.
+    var onGesture: ((GestureEvent) -> Void)?
 
     private let sessionQueue = DispatchQueue(label: "app.paircam.capture.session")
     private let videoQueue = DispatchQueue(label: "app.paircam.capture.video", qos: .userInteractive)
     private let videoOutput = AVCaptureVideoDataOutput()
     private let rotation = CaptureRotation()
     private let encoder: VideoEncoder
+    private let analyzer = VisionAnalyzer()
 
     // Session queue state.
     private var isConfigured = false
@@ -70,6 +87,14 @@ final class CaptureController: NSObject {
     private var request = Request()
     private var focusMode = FocusMode.auto
     private var stabilization = StabilizationMode.off
+    private var faceTracking = false
+    private var gestures = false
+    /// The device zoom factor a running ramp is heading for; `nil` when no ramp is running.
+    private var zoomTarget: CGFloat?
+    /// Bumped by every ramp, so only the latest one reports when it settles.
+    private var zoomGeneration = 0
+    /// The zoom, as the user sees it, when the current spread gesture began.
+    private var spreadStartZoom: Double?
 
     // Video queue state.
     private var isEncoding = false
@@ -95,6 +120,14 @@ final class CaptureController: NSObject {
         rotation.onChange = { [weak self] in
             self?.sessionQueue.async {
                 self?.applyRotation()
+            }
+        }
+        analyzer.onFace = { [weak self] face in
+            self?.onSubject?(SubjectUpdate(face: face))
+        }
+        analyzer.onGesture = { [weak self] event in
+            self?.sessionQueue.async {
+                self?.handle(gesture: event)
             }
         }
 
@@ -249,7 +282,9 @@ final class CaptureController: NSObject {
         }
     }
 
-    /// Changes the controls named in `values` and reports the state of all of them.
+    /// Changes the controls named in `values` and reports the state of all of them. A zoom change
+    /// ramps; the reported zoom is where the ramp will settle, and `onControlsChange` reports
+    /// again once it has.
     func applyControl(_ values: ControlValues, completion: @escaping (ControlValues) -> Void) {
         sessionQueue.async {
             if let device = self.activeCamera?.device {
@@ -264,6 +299,12 @@ final class CaptureController: NSObject {
             if let mode = values.stabilization, mode != .unknown {
                 self.stabilization = mode
                 self.applyStabilization()
+            }
+            if values.faceTracking != nil || values.gestures != nil {
+                self.setVision(
+                    faceTracking: values.faceTracking ?? self.faceTracking,
+                    gestures: values.gestures ?? self.gestures
+                )
             }
             completion(self.controlState())
         }
@@ -308,6 +349,15 @@ final class CaptureController: NSObject {
             return
         }
 
+        // A multi-lens camera starts on the wide lens (1×) and keeps its zoom across format
+        // changes, rather than falling back to the ultra wide at the device's own 1.
+        var displayZoom = 1.0
+        if camera.id == activeCamera?.id, input != nil {
+            displayZoom = currentZoom(of: camera)
+        }
+        zoomTarget = nil
+        zoomGeneration += 1
+
         if camera.id != activeCamera?.id || input == nil {
             do {
                 let newInput = try AVCaptureDeviceInput(device: camera.device)
@@ -351,6 +401,9 @@ final class CaptureController: NSObject {
             let frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
             device.activeVideoMinFrameDuration = frameDuration
             device.activeVideoMaxFrameDuration = frameDuration
+            if camera.zoomScale != 1 {
+                device.videoZoomFactor = zoomFactor(forDisplay: displayZoom, camera: camera)
+            }
             if focusMode == .auto, device.isFocusModeSupported(.continuousAutoFocus) {
                 device.focusMode = .continuousAutoFocus
             }
@@ -449,13 +502,15 @@ final class CaptureController: NSObject {
     // MARK: - Controls
 
     private func controlCapabilities() -> ControlCapabilities {
-        guard let device = activeCamera?.device else {
+        guard let camera = activeCamera else {
             return ControlCapabilities()
         }
+        let device = camera.device
         var controls = ControlCapabilities()
+        let limits = zoomLimits(of: camera)
         controls.zoom = ValueRange(
-            min: Double(device.minAvailableVideoZoomFactor),
-            max: Double(min(device.maxAvailableVideoZoomFactor, CaptureController.maxZoom))
+            min: CaptureController.displayRounded(Double(limits.lowerBound / camera.zoomScale)),
+            max: CaptureController.displayRounded(Double(limits.upperBound / camera.zoomScale))
         )
         controls.exposureBias = ValueRange(
             min: Double(device.minExposureTargetBias),
@@ -488,15 +543,20 @@ final class CaptureController: NSObject {
         if modes.count > 1 {
             controls.stabilization = modes
         }
+        controls.faceTracking = true
+        controls.gestures = [.palm, .frame, .spread]
         return controls
     }
 
     private func controlState() -> ControlValues {
-        guard let device = activeCamera?.device else {
+        guard let camera = activeCamera else {
             return ControlValues()
         }
+        let device = camera.device
         var state = ControlValues()
-        state.zoom = Double(device.videoZoomFactor)
+        state.zoom = CaptureController.displayRounded(currentZoom(of: camera))
+        state.faceTracking = faceTracking
+        state.gestures = gestures
         state.focus = focusMode
         if device.isLockingFocusWithCustomLensPositionSupported {
             state.focusPosition = Double(device.lensPosition)
@@ -512,9 +572,8 @@ final class CaptureController: NSObject {
 
     /// Applies device controls. The device must be locked for configuration.
     private func apply(_ values: ControlValues, to device: AVCaptureDevice) {
-        if let zoom = values.zoom {
-            let upper = min(device.maxAvailableVideoZoomFactor, CaptureController.maxZoom)
-            device.videoZoomFactor = min(max(CGFloat(zoom), device.minAvailableVideoZoomFactor), upper)
+        if let zoom = values.zoom, let camera = activeCamera, camera.device === device {
+            rampZoom(to: zoom, camera: camera, rate: CaptureController.zoomRampRate)
         }
 
         if let focus = values.focus {
@@ -601,6 +660,134 @@ final class CaptureController: NSObject {
         }
     }
 
+    // MARK: - Zoom
+
+    /// The device zoom factors the camera may use.
+    private func zoomLimits(of camera: CameraDescriptor) -> ClosedRange<CGFloat> {
+        let device = camera.device
+        let lower = device.minAvailableVideoZoomFactor
+        let upper = min(device.maxAvailableVideoZoomFactor, CaptureController.maxZoom * camera.zoomScale)
+        return lower...max(lower, upper)
+    }
+
+    /// Converts a zoom as the user sees it (1× is the wide lens) to a device factor in range.
+    private func zoomFactor(forDisplay zoom: Double, camera: CameraDescriptor) -> CGFloat {
+        let limits = zoomLimits(of: camera)
+        let factor = CGFloat(zoom) * camera.zoomScale
+        return min(max(factor, limits.lowerBound), limits.upperBound)
+    }
+
+    /// The zoom as the user sees it: where a running ramp will settle, or the current factor.
+    private func currentZoom(of camera: CameraDescriptor) -> Double {
+        Double((zoomTarget ?? camera.device.videoZoomFactor) / camera.zoomScale)
+    }
+
+    /// Ramps smoothly to a zoom as the user sees it. The device must be locked for configuration.
+    private func rampZoom(to zoom: Double, camera: CameraDescriptor, rate: Float) {
+        guard zoom.isFinite else {
+            return
+        }
+        let device = camera.device
+        let target = zoomFactor(forDisplay: zoom, camera: camera)
+        device.ramp(toVideoZoomFactor: target, withRate: rate)
+        zoomTarget = target
+        zoomGeneration += 1
+        let generation = zoomGeneration
+        sessionQueue.asyncAfter(deadline: .now() + CaptureController.zoomSettleCheckInterval) { [weak self] in
+            self?.checkZoomSettled(generation: generation)
+        }
+    }
+
+    /// Reports the zoom once the latest ramp has finished.
+    private func checkZoomSettled(generation: Int) {
+        guard generation == zoomGeneration, let device = activeCamera?.device else {
+            return
+        }
+        if device.isRampingVideoZoom {
+            sessionQueue.asyncAfter(deadline: .now() + CaptureController.zoomSettleCheckInterval) { [weak self] in
+                self?.checkZoomSettled(generation: generation)
+            }
+            return
+        }
+        zoomTarget = nil
+        onControlsChange?(controlState())
+    }
+
+    private static func displayRounded(_ zoom: Double) -> Double {
+        (zoom * 100).rounded() / 100
+    }
+
+    // MARK: - Face tracking and gestures
+
+    private func setVision(faceTracking newFaceTracking: Bool, gestures newGestures: Bool) {
+        let changed = newFaceTracking != faceTracking || newGestures != gestures
+        faceTracking = newFaceTracking
+        gestures = newGestures
+        analyzer.setOptions(VisionAnalyzer.Options(faceTracking: newFaceTracking, gestures: newGestures))
+        if changed {
+            EngineLog.shared.info(
+                "vision",
+                "face tracking \(newFaceTracking ? "on" : "off"), gestures \(newGestures ? "on" : "off")"
+            )
+        }
+    }
+
+    /// Acts on a gesture, then tells the desktop what happened.
+    private func handle(gesture event: HandGestureRecognizer.Event) {
+        // Turning gestures off ends a spread in progress; anything else that arrives afterwards
+        // comes from an analysis that was already running.
+        guard gestures || event == .spreadEnded else {
+            return
+        }
+        switch event {
+        case .palm:
+            setVision(faceTracking: !faceTracking, gestures: gestures)
+            EngineLog.shared.info("vision", "gesture palm: face tracking \(faceTracking ? "on" : "off")")
+            onControlsChange?(controlState())
+            onGesture?(GestureEvent(kind: .palm, phase: .recognised))
+        case .frame:
+            guard let camera = activeCamera else {
+                return
+            }
+            let current = currentZoom(of: camera)
+            let target = current > GestureTuning.frameZoomOutAbove ? 1.0 : GestureTuning.frameZoom
+            EngineLog.shared.info("vision", "gesture frame: zoom from \(current) to \(target)")
+            lockAndRampZoom(to: target, camera: camera, rate: CaptureController.frameZoomRampRate)
+            onGesture?(GestureEvent(kind: .frame, phase: .recognised))
+        case .spreadBegan:
+            guard let camera = activeCamera else {
+                return
+            }
+            let start = currentZoom(of: camera)
+            spreadStartZoom = start
+            EngineLog.shared.info("vision", "gesture spread began at zoom \(start)")
+            onGesture?(GestureEvent(kind: .spread, phase: .began))
+        case .spreadChanged(let scale):
+            guard let camera = activeCamera, let start = spreadStartZoom else {
+                return
+            }
+            let target = start * pow(scale, GestureTuning.spreadZoomExponent)
+            lockAndRampZoom(to: target, camera: camera, rate: CaptureController.spreadZoomRampRate)
+        case .spreadEnded:
+            guard spreadStartZoom != nil else {
+                return
+            }
+            spreadStartZoom = nil
+            EngineLog.shared.info("vision", "gesture spread ended")
+            onGesture?(GestureEvent(kind: .spread, phase: .ended))
+        }
+    }
+
+    private func lockAndRampZoom(to zoom: Double, camera: CameraDescriptor, rate: Float) {
+        do {
+            try camera.device.lockForConfiguration()
+            rampZoom(to: zoom, camera: camera, rate: rate)
+            camera.device.unlockForConfiguration()
+        } catch {
+            EngineLog.shared.warning("capture", "could not lock the camera to zoom: \(error)")
+        }
+    }
+
     private static func captureMode(for mode: StabilizationMode) -> AVCaptureVideoStabilizationMode {
         switch mode {
         case .standard:
@@ -672,13 +859,17 @@ extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard isEncoding, let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
-        encoder.encode(
-            imageBuffer,
-            presentationTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
-            duration: CMSampleBufferGetDuration(sampleBuffer)
-        )
+        if isEncoding {
+            encoder.encode(
+                imageBuffer,
+                presentationTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
+                duration: CMSampleBufferGetDuration(sampleBuffer)
+            )
+        }
+        // After the encoder, and it only queues the frame: analysis never delays encoding.
+        analyzer.submit(imageBuffer)
     }
 }

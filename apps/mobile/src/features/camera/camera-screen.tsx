@@ -21,6 +21,7 @@ import { PairingSheet } from './pairing-sheet';
 import { PermissionBlocked } from './permission-blocked';
 import { SessionPanel } from './session-panel';
 import { SetupOverlay } from './setup-overlay';
+import { GestureToast, TrackingBadge } from './vision-indicator';
 
 const KEEP_AWAKE_TAG = 'paircam-session';
 
@@ -153,11 +154,14 @@ export function CameraScreen() {
           pointerEvents="box-none"
         >
           <View className="flex-row items-start justify-between gap-3" pointerEvents="box-none">
-            <StatusPill
-              tone={statusTone(state, environment.wifi)}
-              label={statusLabel}
-              className="shrink"
-            />
+            <View className="shrink flex-row items-start gap-2" pointerEvents="box-none">
+              <StatusPill
+                tone={statusTone(state, environment.wifi)}
+                label={statusLabel}
+                className="shrink"
+              />
+              <TrackingBadge />
+            </View>
             <IconButton
               icon="gearshape"
               accessibilityLabel={t('settings.title')}
@@ -167,6 +171,10 @@ export function CameraScreen() {
 
           <View style={styles.column} className="mt-3 w-full" pointerEvents="box-none">
             <CameraNotice state={state} environment={environment} disconnect={disconnect} />
+          </View>
+
+          <View className="mt-3 items-center" pointerEvents="none">
+            <GestureToast />
           </View>
 
           <View className="flex-1" pointerEvents="none" />

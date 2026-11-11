@@ -26,6 +26,14 @@ declare class CameraEngineNativeModule extends NativeModule<CameraEngineEvents> 
   /** Ends the current session and goes back to waiting for a computer. */
   disconnect(): Promise<void>;
 
+  /**
+   * The user's choice of face tracking in Settings. Applied when a session starts, and at once to
+   * a session that is already running.
+   */
+  setFaceTracking(enabled: boolean): Promise<void>;
+  /** The user's choice of hand gestures in Settings, applied like `setFaceTracking`. */
+  setGestures(enabled: boolean): Promise<void>;
+
   getPairedHosts(): Promise<PairedHost[]>;
   forgetHost(id: string): Promise<void>;
 

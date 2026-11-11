@@ -101,6 +101,16 @@
       "unknown": "Bilinmiyor"
     }
   },
+  "vision": {
+    "tracking": "Takip",
+    "trackingLabel": "Yüz takibi açık",
+    "gestureAnnouncement": "Hareket algılandı: {{gesture}}",
+    "gesture": {
+      "palm": "Açık avuç",
+      "frame": "L işareti",
+      "spread": "İki el"
+    }
+  },
   "settings": {
     "title": "Ayarlar",
     "pairedComputers": {
@@ -112,6 +122,29 @@
       "forgetLabel": "{{host}} cihazını unut",
       "forgetTitle": "{{host}} unutulsun mu?",
       "forgetBody": "Bu bilgisayarın bu iPhone'u kullanabilmesi için yeniden eşleştirilmesi gerekir."
+    },
+    "handsFree": {
+      "title": "Eller serbest",
+      "faceTracking": "Yüz takibi",
+      "faceTrackingHint": "Bilgisayarınız sizi görüntünün ortasında tutar.",
+      "gestures": "El hareketleri",
+      "gesturesHint": "Kamerayı aşağıdaki hareketlerle kontrol edin.",
+      "footer": "İkisi de her oturumla birlikte başlar. Bilgisayarınız da bunları açıp kapatabilir."
+    },
+    "gestures": {
+      "title": "Hareketler",
+      "palm": {
+        "title": "Açık avuç",
+        "body": "Yüz takibini açmak ya da kapatmak için açık elinizi bir saniye havada tutun."
+      },
+      "frame": {
+        "title": "L işareti",
+        "body": "2× yakınlaştırmak ve geri dönmek için baş ve işaret parmağınızla bir saniye L yapın."
+      },
+      "spread": {
+        "title": "İki el",
+        "body": "Yakınlaştırmak için iki açık elinizi birbirinden uzaklaştırın, uzaklaştırmak için yaklaştırın."
+      }
     },
     "preferences": {
       "title": "Tercihler"

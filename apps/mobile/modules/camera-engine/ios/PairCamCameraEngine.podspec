@@ -15,7 +15,7 @@ Pod::Spec.new do |s|
 
   s.dependency 'ExpoModulesCore'
 
-  s.frameworks = 'AVFoundation', 'CoreMedia', 'CryptoKit', 'Network', 'Security', 'VideoToolbox'
+  s.frameworks = 'AVFoundation', 'CoreMedia', 'CryptoKit', 'Network', 'Security', 'VideoToolbox', 'Vision'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',

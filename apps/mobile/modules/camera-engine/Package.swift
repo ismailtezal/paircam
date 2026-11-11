@@ -1,11 +1,13 @@
 // swift-tools-version: 5.9
 
-// Builds and tests the protocol sources on their own, without Xcode, CocoaPods or React Native:
+// Builds and tests the protocol and hand gesture sources on their own, without Xcode, CocoaPods or
+// React Native:
 //
 //     cd apps/mobile/modules/camera-engine && swift test
 //
 // The app itself does not use this package. CocoaPods compiles the same files as part of the
-// PairCamCameraEngine pod (see `ios/PairCamCameraEngine.podspec`).
+// PairCamCameraEngine pod (see `ios/PairCamCameraEngine.podspec`), so the files in each target
+// must not import one another's module.
 
 import PackageDescription
 
@@ -17,15 +19,20 @@ let package = Package(
     ],
     products: [
         .library(name: "PairCamProtocol", targets: ["PairCamProtocol"]),
+        .library(name: "PairCamGestures", targets: ["PairCamGestures"]),
     ],
     targets: [
         .target(
             name: "PairCamProtocol",
             path: "ios/Protocol"
         ),
+        .target(
+            name: "PairCamGestures",
+            path: "ios/Gestures"
+        ),
         .testTarget(
             name: "PairCamProtocolTests",
-            dependencies: ["PairCamProtocol"],
+            dependencies: ["PairCamProtocol", "PairCamGestures"],
             path: "tests/PairCamProtocolTests",
             resources: [.copy("Resources/v0.json")]
         ),

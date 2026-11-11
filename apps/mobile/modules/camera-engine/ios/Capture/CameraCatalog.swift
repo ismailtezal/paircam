@@ -1,12 +1,17 @@
 import AVFoundation
 import CoreMedia
 
-/// One physical camera the phone can stream from.
+/// One camera the phone can stream from: a single lens, or a multi-lens virtual camera that
+/// switches lenses by itself as it zooms.
 struct CameraDescriptor {
     let id: String
     let device: AVCaptureDevice
     let position: CameraPosition
     let lens: CameraLens
+    /// The device zoom factor shown as 1×. For a virtual camera that includes the ultra wide
+    /// lens the device's 1 is the ultra wide, so the wide lens (1× to the user) sits at the first
+    /// switch-over factor and the ultra wide shows as 0.5×. Every other camera uses 1.
+    let zoomScale: CGFloat
 }
 
 /// Finds the phone's cameras and describes what each can do.
@@ -23,22 +28,34 @@ enum CameraCatalog {
     private static let maxReportedFps = 60
     private static let minReportedFps = 15
 
-    /// The single-lens cameras, in the order the desktop should list them. Virtual multi-lens
-    /// devices are left out: the desktop picks a lens explicitly.
+    /// The virtual multi-lens cameras, best first. Only the best one on each side is offered.
+    private static let virtualDeviceTypes: [AVCaptureDevice.DeviceType] = [
+        .builtInTripleCamera,
+        .builtInDualWideCamera,
+        .builtInDualCamera,
+    ]
+
+    /// The cameras, in the order the desktop should list them: each single lens, then the best
+    /// multi-lens virtual camera on each side, which crosses lenses seamlessly as it zooms.
     static func discover() -> [CameraDescriptor] {
+        let singleLensTypes: [AVCaptureDevice.DeviceType] = [
+            .builtInWideAngleCamera,
+            .builtInUltraWideCamera,
+            .builtInTelephotoCamera,
+        ]
         let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [
-                .builtInWideAngleCamera,
-                .builtInUltraWideCamera,
-                .builtInTelephotoCamera,
-            ],
+            deviceTypes: singleLensTypes + virtualDeviceTypes,
             mediaType: .video,
             position: .unspecified
         )
 
+        // Best virtual device first, so the weaker ones on the same side are skipped as seen.
+        let devices = session.devices.sorted { left, right in
+            virtualRank(of: left) < virtualRank(of: right)
+        }
         var seen = Set<String>()
         var cameras = [CameraDescriptor]()
-        for device in session.devices {
+        for device in devices {
             guard let descriptor = describe(device), !seen.contains(descriptor.id) else {
                 continue
             }
@@ -166,6 +183,7 @@ enum CameraCatalog {
 
         let lens: CameraLens
         let lensName: String
+        var zoomScale: CGFloat = 1
         switch device.deviceType {
         case .builtInWideAngleCamera:
             lens = .wide
@@ -176,6 +194,12 @@ enum CameraCatalog {
         case .builtInTelephotoCamera:
             lens = .telephoto
             lensName = "telephoto"
+        case .builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera:
+            // One id for whichever multi-lens camera the phone has, so the desktop can remember
+            // the choice across phones.
+            lens = .other
+            lensName = "multi"
+            zoomScale = wideZoomFactor(of: device)
         default:
             return nil
         }
@@ -184,8 +208,26 @@ enum CameraCatalog {
             id: "\(positionName)-\(lensName)",
             device: device,
             position: position,
-            lens: lens
+            lens: lens,
+            zoomScale: zoomScale
         )
+    }
+
+    /// The device zoom factor at which a virtual camera switches from the ultra wide to the wide
+    /// lens, or 1 if it has no ultra wide lens.
+    private static func wideZoomFactor(of device: AVCaptureDevice) -> CGFloat {
+        guard
+            device.constituentDevices.contains(where: { $0.deviceType == .builtInUltraWideCamera }),
+            let switchOver = device.virtualDeviceSwitchOverVideoZoomFactors.first
+        else {
+            return 1
+        }
+        let factor = CGFloat(truncating: switchOver)
+        return factor > 1 ? factor : 1
+    }
+
+    private static func virtualRank(of device: AVCaptureDevice) -> Int {
+        virtualDeviceTypes.firstIndex(of: device.deviceType) ?? virtualDeviceTypes.count
     }
 
     private static func order(of camera: CameraDescriptor) -> Int {

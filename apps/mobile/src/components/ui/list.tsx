@@ -46,6 +46,8 @@ function ListSection({ title, footer, children }: ListSectionProps) {
 type ListRowProps = {
   title: string;
   subtitle?: string;
+  /** Lets a subtitle that explains the row wrap onto more lines. */
+  subtitleLines?: number;
   /** The current value, shown at the trailing edge. */
   value?: string;
   /** Sets the value in mono, for versions and other machine text. */
@@ -67,6 +69,7 @@ type ListRowProps = {
 function ListRow({
   title,
   subtitle,
+  subtitleLines = 1,
   value,
   monoValue = false,
   selected,
@@ -85,7 +88,7 @@ function ListRow({
       <View className="flex-1 gap-0.5">
         <Text numberOfLines={1}>{title}</Text>
         {subtitle ? (
-          <Text variant="caption" tone="muted" numberOfLines={1}>
+          <Text variant="caption" tone="muted" numberOfLines={subtitleLines}>
             {subtitle}
           </Text>
         ) : null}

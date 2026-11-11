@@ -3,6 +3,7 @@ import {
   type DisconnectEvent,
   type EngineEnvironment,
   type EngineState,
+  type GestureEvent,
   type StreamStats,
 } from 'camera-engine';
 import { useSyncExternalStore } from 'react';
@@ -16,6 +17,11 @@ export type Disconnect = DisconnectEvent & {
   id: number;
 };
 
+export type Gesture = GestureEvent & {
+  /** Distinguishes two identical gestures in a row. */
+  id: number;
+};
+
 export type EngineSnapshot = {
   state: EngineState;
   environment: EngineEnvironment;
@@ -23,6 +29,8 @@ export type EngineSnapshot = {
   stats: StreamStats | null;
   /** How the last session ended, until it is acknowledged or a new session begins. */
   disconnect: Disconnect | null;
+  /** The last hand gesture the camera acted on in this session, or `null`. */
+  gesture: Gesture | null;
 };
 
 let snapshot: EngineSnapshot = {
@@ -30,11 +38,13 @@ let snapshot: EngineSnapshot = {
   environment: CameraEngine.getEnvironment(),
   stats: null,
   disconnect: null,
+  gesture: null,
 };
 
 const listeners = new Set<() => void>();
 let subscribed = false;
 let disconnectCount = 0;
+let gestureCount = 0;
 
 function update(change: Partial<EngineSnapshot>) {
   snapshot = { ...snapshot, ...change };
@@ -54,6 +64,7 @@ function subscribeToEngine() {
       stats: state.status === 'streaming' ? snapshot.stats : null,
       // A new session supersedes the story of how the previous one ended.
       disconnect: active ? null : snapshot.disconnect,
+      gesture: active ? snapshot.gesture : null,
     });
   });
   CameraEngine.addListener('onEnvironmentChange', (environment) => {
@@ -65,6 +76,10 @@ function subscribeToEngine() {
   CameraEngine.addListener('onDisconnect', (event) => {
     disconnectCount += 1;
     update({ disconnect: { ...event, id: disconnectCount } });
+  });
+  CameraEngine.addListener('onGesture', (event) => {
+    gestureCount += 1;
+    update({ gesture: { ...event, id: gestureCount } });
   });
 
   // Events that fired before the listeners were attached are covered by reading once more.
@@ -114,6 +129,13 @@ export const engine = {
   },
   forgetHost(id: string) {
     return CameraEngine.forgetHost(id);
+  },
+  /** The user's choice in Settings; applied when a session starts, and to one already running. */
+  setFaceTracking(enabled: boolean) {
+    CameraEngine.setFaceTracking(enabled).catch(ignoreRejection);
+  },
+  setGestures(enabled: boolean) {
+    CameraEngine.setGestures(enabled).catch(ignoreRejection);
   },
   /** Clears the record of how the last session ended, once the user has seen it. */
   acknowledgeDisconnect() {

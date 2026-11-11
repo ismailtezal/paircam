@@ -59,6 +59,10 @@ export type EngineEnvironment = {
   deviceName: string;
   /** The TCP port the service listens on, or 0 while it is stopped. */
   port: number;
+  /** The camera is finding the person for the computer to frame. Only ever on in a session. */
+  faceTracking: boolean;
+  /** The camera is watching for hand gestures. Only ever on in a session. */
+  gestures: boolean;
 };
 
 export type PairedHost = {
@@ -91,11 +95,30 @@ export type DisconnectEvent = {
   during: 'pairing' | 'connected' | 'streaming';
 };
 
+/**
+ * The hand gestures the camera recognises. Mirrors `GestureKind` in
+ * `ios/Protocol/Messages.swift`.
+ */
+export type GestureKind =
+  /** An open palm held up for about a second: toggles face tracking. */
+  | 'palm'
+  /** Thumb and index finger in an L, held for about a second: zooms to 2x or back to 1x. */
+  | 'frame'
+  /** Two hands moving apart or together: zooms continuously. */
+  | 'spread';
+
+export type GestureEvent = {
+  kind: GestureKind;
+  /** `recognised` for a one-off gesture; `began` then `ended` for `spread`. */
+  phase: 'recognised' | 'began' | 'ended';
+};
+
 export type CameraEngineEvents = {
   onStateChange: (state: EngineState) => void;
   onEnvironmentChange: (environment: EngineEnvironment) => void;
   onStats: (stats: StreamStats) => void;
   onDisconnect: (event: DisconnectEvent) => void;
+  onGesture: (event: GestureEvent) => void;
 };
 
 export type CameraPreviewProps = {

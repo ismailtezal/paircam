@@ -76,6 +76,36 @@
       "bytes": "207b227a6f6f6d223a322e302c22746f726368223a747275657d",
       "exact": false,
       "name": "control"
+    },
+    {
+      "bytes": "207b2266616365547261636b696e67223a747275652c226765737475726573223a66616c73657d",
+      "exact": false,
+      "name": "controlTracking"
+    },
+    {
+      "bytes": "037b2263616d65726173223a5b5d2c22636f64656373223a5b5d2c22636f6e74726f6c73223a7b2266616365547261636b696e67223a747275652c226765737475726573223a5b2270616c6d222c226672616d65222c22737072656164225d7d7d",
+      "exact": false,
+      "name": "capabilitiesTracking"
+    },
+    {
+      "bytes": "227b2266616365223a7b2278223a302e3337352c2279223a302e32352c227769647468223a302e313837352c22686569676874223a302e32357d7d",
+      "exact": false,
+      "name": "subject"
+    },
+    {
+      "bytes": "227b2266616365223a6e756c6c7d",
+      "exact": false,
+      "name": "subjectNone"
+    },
+    {
+      "bytes": "237b226b696e64223a2270616c6d222c227068617365223a227265636f676e69736564227d",
+      "exact": false,
+      "name": "gesture"
+    },
+    {
+      "bytes": "237b226b696e64223a22737072656164222c227068617365223a22626567616e227d",
+      "exact": false,
+      "name": "gestureBegan"
     }
   ],
   "sealed": {

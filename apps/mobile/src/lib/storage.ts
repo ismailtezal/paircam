@@ -6,6 +6,8 @@ import Storage from 'expo-sqlite/kv-store';
 const KEYS = {
   language: 'settings.language',
   appearance: 'settings.appearance',
+  faceTracking: 'settings.faceTracking',
+  gestures: 'settings.gestures',
   onboardingComplete: 'onboarding.complete',
 } as const;
 

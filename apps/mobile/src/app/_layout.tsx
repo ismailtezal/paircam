@@ -6,11 +6,13 @@ import * as React from 'react';
 import { StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import { applyStoredAppearance } from '@/lib/preferences';
+import { applyStoredAppearance, applyStoredCameraControls } from '@/lib/preferences';
 import { useTheme } from '@/theme';
 
 // Applied before the first render so the app never flashes the wrong theme.
 applyStoredAppearance();
+// The engine keeps no settings of its own; it learns them before any computer can connect.
+applyStoredCameraControls();
 
 export default function RootLayout() {
   const { colors } = useTheme();
