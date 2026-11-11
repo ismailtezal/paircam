@@ -40,7 +40,7 @@ final class ListenerService {
         self.name = name
         self.cameraId = cameraId.hex
         triedFallbackPort = false
-        open(port: NWEndpoint.Port(rawValue: ProtocolConstants.defaultPort))
+        self.open(port: NWEndpoint.Port(rawValue: ProtocolConstants.defaultPort))
     }
 
     func stop() {
@@ -129,7 +129,7 @@ final class ListenerService {
                 "listener",
                 "port \(ProtocolConstants.defaultPort) is unavailable (\(description)); using any free port"
             )
-            open(port: nil)
+            self.open(port: nil)
             return
         }
         onEvent?(.failed(description))

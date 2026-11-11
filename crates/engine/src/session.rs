@@ -244,6 +244,9 @@ fn connect(
             match read_message(&mut reader, &mut opener) {
                 Ok(Message::PairResult(result)) => break result.accepted,
                 Ok(Message::Bye(_)) | Err(ProtocolError::Io(_)) => break false,
+                // Keep answering while the user compares the codes, so a camera that checks
+                // the link during pairing does not give up.
+                Ok(Message::Ping(timestamp)) => shared.send(&Message::Pong(timestamp)),
                 Ok(_) => {}
                 Err(error) => return Err(error.into()),
             }

@@ -199,6 +199,12 @@ final class HostSession {
             close(.timeout)
             return
         }
+        // While the user compares the pairing code, the host only waits for `pairResult` and does
+        // not answer pings (see `connect` in `crates/engine/src/session.rs`), so pinging starts
+        // once the session is established. The engine's pairing deadline bounds the wait.
+        guard isEstablished else {
+            return
+        }
         if let pingSentAt {
             if now - pingSentAt > HostSession.pongTimeout {
                 close(.timeout)
