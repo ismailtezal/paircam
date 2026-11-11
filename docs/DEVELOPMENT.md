@@ -85,3 +85,22 @@ windows:
 ```bash
 powershell -ExecutionPolicy Bypass -File scripts/window-shot.ps1 -Process paircam -Out shot.png
 ```
+
+## The virtual camera
+
+`native/vcam` is the DLL Windows loads when an app opens the "PairCam" camera. Build it and run
+its test harness, which drives the DLL without registering it:
+
+```bash
+powershell -ExecutionPolicy Bypass -File native/vcam/build.ps1 -Test
+```
+
+Installing it needs administrator rights once, because Windows only loads camera components
+registered for the whole computer. The desktop app offers "Install camera", which runs:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/register-vcam.ps1
+```
+
+Run it again after rebuilding the DLL. `scripts/unregister-vcam.ps1` removes it. The camera is
+visible to other apps only while PairCam is running.
