@@ -77,7 +77,7 @@ private let lFrame = makeHand(thumb: .side, middle: .curled, ring: .curled, litt
 private let fist = makeHand(thumb: .tucked, index: .curled, middle: .curled, ring: .curled, little: .curled)
 
 /// Runs the recognizer over `frames` analyses at the analysis rate, starting at `start` seconds.
-private func run(
+private func simulate(
     _ recognizer: inout HandGestureRecognizer,
     from start: Double = 0,
     frames: Int,
@@ -161,28 +161,28 @@ final class HandShapeTests: XCTestCase {
 final class OneOffGestureTests: XCTestCase {
     func testPalmFiresOnceAfterBeingHeldForASecond() {
         var recognizer = HandGestureRecognizer()
-        let early = run(&recognizer, frames: 14) { _ in [openPalm] }
+        let early = simulate(&recognizer, frames: 14) { _ in [openPalm] }
         XCTAssertEqual(oneOffs(early), [])
 
-        let rest = run(&recognizer, from: 14 / analysisRate, frames: 40) { _ in [openPalm] }
+        let rest = simulate(&recognizer, from: 14 / analysisRate, frames: 40) { _ in [openPalm] }
         XCTAssertEqual(oneOffs(rest), [.palm])
     }
 
     func testFrameFiresAfterBeingHeld() {
         var recognizer = HandGestureRecognizer()
-        let events = run(&recognizer, frames: 20) { _ in [lFrame] }
+        let events = simulate(&recognizer, frames: 20) { _ in [lFrame] }
         XCTAssertEqual(oneOffs(events), [.frame])
     }
 
     func testABriefHoldDoesNothing() {
         var recognizer = HandGestureRecognizer()
-        let events = run(&recognizer, frames: 30) { frame in frame < 12 ? [openPalm] : [] }
+        let events = simulate(&recognizer, frames: 30) { frame in frame < 12 ? [openPalm] : [] }
         XCTAssertEqual(events, [])
     }
 
     func testAShortDropoutDoesNotBreakTheHold() {
         var recognizer = HandGestureRecognizer()
-        let events = run(&recognizer, frames: 18) { frame in
+        let events = simulate(&recognizer, frames: 18) { frame in
             frame == 7 || frame == 8 ? [] : [openPalm]
         }
         XCTAssertEqual(oneOffs(events), [.palm])
@@ -190,7 +190,7 @@ final class OneOffGestureTests: XCTestCase {
 
     func testALongDropoutRestartsTheHold() {
         var recognizer = HandGestureRecognizer()
-        let events = run(&recognizer, frames: 18) { frame in
+        let events = simulate(&recognizer, frames: 18) { frame in
             (5...10).contains(frame) ? [] : [openPalm]
         }
         XCTAssertEqual(events, [])
@@ -199,31 +199,31 @@ final class OneOffGestureTests: XCTestCase {
     func testCoolDownAndReleaseAfterFiring() {
         var recognizer = HandGestureRecognizer()
         // Fires at 1.0 s; the cool-down runs to 3.0 s.
-        let first = run(&recognizer, frames: 18) { _ in [openPalm] }
+        let first = simulate(&recognizer, frames: 18) { _ in [openPalm] }
         XCTAssertEqual(oneOffs(first), [.palm])
         // Let go, then show the palm again during the cool-down: nothing.
-        let during = run(&recognizer, from: 18 / analysisRate, frames: 25) { frame in
+        let during = simulate(&recognizer, from: 18 / analysisRate, frames: 25) { frame in
             frame < 6 ? [] : [openPalm]
         }
         XCTAssertEqual(during, [])
         // Keep holding past the end of the cool-down: it fires again.
-        let after = run(&recognizer, from: 43 / analysisRate, frames: 10) { _ in [openPalm] }
+        let after = simulate(&recognizer, from: 43 / analysisRate, frames: 10) { _ in [openPalm] }
         XCTAssertEqual(oneOffs(after), [.palm])
     }
 
     func testHoldingOnDoesNotRepeat() {
         var recognizer = HandGestureRecognizer()
-        let events = run(&recognizer, frames: Int(analysisRate * 6)) { _ in [openPalm] }
+        let events = simulate(&recognizer, frames: Int(analysisRate * 6)) { _ in [openPalm] }
         XCTAssertEqual(oneOffs(events), [.palm])
     }
 
     func testFistsTinyHandsAndUncertainHandsNeverFire() {
         var recognizer = HandGestureRecognizer()
-        let fists = run(&recognizer, frames: 45) { _ in [fist] }
+        let fists = simulate(&recognizer, frames: 45) { _ in [fist] }
         XCTAssertEqual(fists, [])
-        let tiny = run(&recognizer, from: 3, frames: 45) { _ in [makeHand(size: 0.03)] }
+        let tiny = simulate(&recognizer, from: 3, frames: 45) { _ in [makeHand(size: 0.03)] }
         XCTAssertEqual(tiny, [])
-        let uncertain = run(&recognizer, from: 6, frames: 45) { _ in [makeHand(confidence: 0.3)] }
+        let uncertain = simulate(&recognizer, from: 6, frames: 45) { _ in [makeHand(confidence: 0.3)] }
         XCTAssertEqual(uncertain, [])
     }
 
@@ -236,7 +236,7 @@ final class OneOffGestureTests: XCTestCase {
             ring: .curled,
             little: .curled
         )
-        let events = run(&recognizer, frames: 30) { _ in [openPalm, other] }
+        let events = simulate(&recognizer, frames: 30) { _ in [openPalm, other] }
         XCTAssertEqual(events, [])
     }
 }
@@ -251,7 +251,7 @@ final class SpreadGestureTests: XCTestCase {
     func testHandsMovingApartZoomIn() {
         var recognizer = HandGestureRecognizer()
         // Rest, move apart for a second, then hold still.
-        let events = run(&recognizer, frames: 60) { frame in
+        let events = simulate(&recognizer, frames: 60) { frame in
             let moving = min(max(frame - 8, 0), 15)
             return [self.left, self.right(at: 1.1 + Double(moving) * 0.03)]
         }
@@ -275,7 +275,7 @@ final class SpreadGestureTests: XCTestCase {
 
     func testHandsMovingTogetherZoomOut() {
         var recognizer = HandGestureRecognizer()
-        let events = run(&recognizer, frames: 30) { frame in
+        let events = simulate(&recognizer, frames: 30) { frame in
             let moving = min(max(frame - 8, 0), 15)
             return [self.left, self.right(at: 1.4 - Double(moving) * 0.03)]
         }
@@ -291,13 +291,13 @@ final class SpreadGestureTests: XCTestCase {
 
     func testStillHandsDoNothing() {
         var recognizer = HandGestureRecognizer()
-        let events = run(&recognizer, frames: 45) { _ in [self.left, self.right(at: 1.1)] }
+        let events = simulate(&recognizer, frames: 45) { _ in [self.left, self.right(at: 1.1)] }
         XCTAssertEqual(events, [])
     }
 
     func testSpreadEndsWhenAHandLeaves() {
         var recognizer = HandGestureRecognizer()
-        let events = run(&recognizer, frames: 40) { frame in
+        let events = simulate(&recognizer, frames: 40) { frame in
             if frame >= 20 {
                 return [self.left]
             }
@@ -312,7 +312,7 @@ final class SpreadGestureTests: XCTestCase {
 
     func testResetEndsASpreadInProgress() {
         var recognizer = HandGestureRecognizer()
-        _ = run(&recognizer, frames: 15) { frame in
+        _ = simulate(&recognizer, frames: 15) { frame in
             [self.left, self.right(at: 1.1 + Double(frame) * 0.03)]
         }
         XCTAssertTrue(recognizer.isSpreading)
