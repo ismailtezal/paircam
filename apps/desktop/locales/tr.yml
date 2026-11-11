@@ -72,7 +72,7 @@ inspector:
   quality: Kalite
   codec: Biçim
   controls: KAMERA
-  zoom: Yakınlaştırma
+  zoom: Kamera yakınlaştırması
   exposure: Pozlama
   torch: El feneri
   focus_lock: Odağı kilitle

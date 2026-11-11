@@ -5,6 +5,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -47,6 +48,9 @@ use crate::text;
 const WHEEL_ZOOM_RATE: f32 = 0.0025;
 
 /// What the app is started with.
+/// How long after a change made here the phone's reports are treated as its echo.
+const CONTROL_ECHO_WINDOW: Duration = Duration::from_millis(700);
+
 pub struct Startup {
     /// Connect to this address right away.
     pub connect_to: Option<SocketAddr>,
@@ -82,6 +86,9 @@ pub struct PairCamApp {
     stream_controls: Option<StreamControls>,
     /// Whether the phone has reported its control values since the session began.
     controls_synced: bool,
+    /// When the user last changed a camera control here, to tell their own changes from the
+    /// phone's.
+    last_control_change: Option<Instant>,
     controls: ControlValues,
     video: Option<VideoInfo>,
     link: LinkStats,
@@ -230,6 +237,7 @@ impl PairCamApp {
             last_address: connect_to,
             stream_controls: None,
             controls_synced: false,
+            last_control_change: None,
             controls: ControlValues::default(),
             video: None,
             link: LinkStats::default(),
@@ -334,6 +342,18 @@ impl PairCamApp {
                 self.controls = controls;
                 // The sliders start from the first values the phone reports. Later reports echo
                 // the user’s own changes and must not rebuild a slider that is being dragged.
+                // A report that arrives while the user is dragging is the echo of that drag;
+                // anything else is the phone changing a value itself (a zoom gesture), and the
+                // sliders follow it.
+                let dragging = self
+                    .last_control_change
+                    .is_some_and(|at| at.elapsed() < CONTROL_ECHO_WINDOW);
+                if self.controls_synced
+                    && !dragging
+                    && let Some(stream_controls) = self.stream_controls.as_ref()
+                {
+                    stream_controls.sync(&self.controls, window, cx);
+                }
                 if !self.controls_synced {
                     self.controls_synced = true;
                     if let Some(capabilities) = self
@@ -598,6 +618,7 @@ impl PairCamApp {
 
     /// Sends a camera control change and shows it right away.
     pub(crate) fn set_control(&mut self, change: ControlValues, cx: &mut Context<Self>) {
+        self.last_control_change = Some(Instant::now());
         self.engine.control(change.clone());
         let current = &mut self.controls;
         current.zoom = change.zoom.or(current.zoom);

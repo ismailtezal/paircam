@@ -72,7 +72,7 @@ inspector:
   quality: Quality
   codec: Format
   controls: CAMERA
-  zoom: Zoom
+  zoom: Camera zoom
   exposure: Exposure
   torch: Flashlight
   focus_lock: Lock focus

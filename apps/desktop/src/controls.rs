@@ -236,6 +236,21 @@ impl StreamControls {
         })
     }
 
+    /// Moves the sliders to values the phone changed by itself, such as a zoom gesture.
+    pub fn sync(&self, values: &ControlValues, window: &mut Window, cx: &mut App) {
+        for (slider, value) in [
+            (self.zoom.as_ref(), values.zoom),
+            (self.exposure.as_ref(), values.exposure_bias),
+        ] {
+            let (Some(slider), Some(value)) = (slider, value) else {
+                continue;
+            };
+            if (slider.read(cx).value().start() - value).abs() > 0.05 {
+                slider.update(cx, |slider, cx| slider.set_value(value, window, cx));
+            }
+        }
+    }
+
     pub fn capabilities(&self) -> &Capabilities {
         &self.capabilities
     }
