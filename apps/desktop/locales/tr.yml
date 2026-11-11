@@ -58,6 +58,7 @@ live:
   decoder_cpu: CPU
 
 inspector:
+  webcam: Web kamerası
   device: CİHAZ
   battery: Pil
   charging: şarj oluyor
@@ -108,3 +109,12 @@ settings:
   about: HAKKINDA
   version: "PairCam %{version}"
   licence: MIT lisansıyla özgür ve açık kaynak.
+
+camera:
+  not_installed: PairCam kamerası henüz kurulmadı; diğer uygulamalar telefonunu göremez.
+  unsupported: Bu Windows sürümünde diğer uygulamalar telefonunu göremez. PairCam kamerası Windows 11 gerektirir.
+  failed: "Windows, PairCam kamerasını başlatamadı: %{detail}"
+  install: Kamerayı kur
+  status_ready: Hazır
+  status_in_use: Bir uygulama kullanıyor
+  status_unavailable: Kullanılamıyor

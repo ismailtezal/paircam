@@ -58,6 +58,7 @@ live:
   decoder_cpu: CPU
 
 inspector:
+  webcam: Webcam
   device: DEVICE
   battery: Battery
   charging: charging
@@ -108,3 +109,12 @@ settings:
   about: ABOUT
   version: "PairCam %{version}"
   licence: Free and open source under the MIT licence.
+
+camera:
+  not_installed: The PairCam camera is not installed yet, so other apps cannot see your phone.
+  unsupported: Other apps cannot see your phone on this version of Windows. The PairCam camera needs Windows 11.
+  failed: "Windows could not start the PairCam camera: %{detail}"
+  install: Install camera
+  status_ready: Ready
+  status_in_use: In use by an app
+  status_unavailable: Not available

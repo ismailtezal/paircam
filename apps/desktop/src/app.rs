@@ -20,6 +20,7 @@ use gpui_kit::{
 };
 use image::{Frame, RgbaImage};
 use paircam_engine::protocol::{Capabilities, ControlValues, DEFAULT_PORT, Stats, Thermal};
+use paircam_engine::vcam::VirtualCamera;
 use paircam_engine::{
     Channels, DiscoveredCamera, Engine, Event, Failure, LinkStats, PairedCamera, Phase,
     PreviewFrame, VideoInfo,
@@ -30,6 +31,7 @@ use paircam_ui::{
 };
 use smallvec::SmallVec;
 
+use crate::camera::{self, CameraStatus};
 use crate::controls::StreamControls;
 use crate::settings::{self, Appearance, Preferences, SettingsView};
 use crate::text;
@@ -43,6 +45,8 @@ pub struct Startup {
     /// Where settings are kept.
     pub data_directory: PathBuf,
     pub preferences: Preferences,
+    /// The feed to the virtual camera, kept alive for the whole run.
+    pub camera: Option<VirtualCamera>,
 }
 
 /// One phone on the connect screen.
@@ -79,6 +83,12 @@ pub struct PairCamApp {
     address: Entity<InputState>,
     data_directory: PathBuf,
     preferences: Preferences,
+    _camera: Option<VirtualCamera>,
+    camera_status: CameraStatus,
+    /// Whether another app is showing the PairCam camera right now.
+    camera_in_use: bool,
+    /// Whether the camera install script is running.
+    installing_camera: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -95,7 +105,28 @@ impl PairCamApp {
             show_settings,
             data_directory,
             preferences,
+            camera,
         } = startup;
+
+        // Hear when another app starts or stops using the PairCam camera.
+        if let Some(camera) = camera.as_ref() {
+            let (sender, in_use) = async_channel::unbounded();
+            camera.set_streaming_listener(move |streaming| {
+                let _ = sender.try_send(streaming);
+            });
+            cx.spawn(async move |this, cx| {
+                while let Ok(streaming) = in_use.recv().await {
+                    let updated = this.update(cx, |this, cx| {
+                        this.camera_in_use = streaming;
+                        cx.notify();
+                    });
+                    if updated.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
 
         // Follow Windows when it switches between light and dark, if the user asked for that.
         cx.observe_window_appearance(window, |this, window, cx| {
@@ -166,8 +197,81 @@ impl PairCamApp {
             address,
             data_directory,
             preferences,
+            _camera: camera,
+            camera_status: CameraStatus::activate(),
+            camera_in_use: false,
+            installing_camera: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Installs the camera component, which asks Windows for administrator rights once.
+    fn install_camera(&mut self, cx: &mut Context<Self>) {
+        if self.installing_camera {
+            return;
+        }
+        self.installing_camera = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let installed = cx.background_spawn(async { camera::install() }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.installing_camera = false;
+                if installed {
+                    this.camera_status = CameraStatus::activate();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A bar under the title bar when other apps cannot see the camera yet.
+    fn camera_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let message = match &self.camera_status {
+            CameraStatus::Active { .. } => return None,
+            CameraStatus::NotInstalled => text!("camera.not_installed"),
+            CameraStatus::Unsupported => text!("camera.unsupported"),
+            CameraStatus::Failed(detail) => text!("camera.failed", detail = detail),
+        };
+        let can_install =
+            matches!(self.camera_status, CameraStatus::NotInstalled) && camera::can_install();
+
+        Some(
+            div()
+                .h_flex()
+                .flex_none()
+                .items_center()
+                .justify_between()
+                .gap_4()
+                .px_4()
+                .py_2()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .bg(color(palette(cx).surface))
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Icon::new(IconName::Webcam)
+                                .size_4()
+                                .text_color(color(palette(cx).warning)),
+                        )
+                        .child(div().text_size(px(font::size::BASE)).child(message)),
+                )
+                .when(can_install, |banner| {
+                    banner.child(
+                        Button::new("install-camera")
+                            .primary()
+                            .small()
+                            .loading(self.installing_camera)
+                            .label(text!("camera.install"))
+                            .on_click(cx.listener(|this, _, _, cx| this.install_camera(cx))),
+                    )
+                })
+                .into_any_element(),
+        )
     }
 
     fn handle_event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
@@ -823,6 +927,13 @@ impl PairCamApp {
                 SharedString::from(percent)
             }
         });
+        let webcam = if !self.camera_status.is_active() {
+            text!("camera.status_unavailable")
+        } else if self.camera_in_use {
+            text!("camera.status_in_use")
+        } else {
+            text!("camera.status_ready")
+        };
         let temperature = stats.map(|stats| match stats.thermal {
             Thermal::Nominal => text!("thermal.nominal"),
             Thermal::Fair => text!("thermal.fair"),
@@ -862,6 +973,7 @@ impl PairCamApp {
                                     .child(SharedString::from(camera_name.to_owned())),
                             ),
                     )
+                    .child(Self::detail_row(text!("inspector.webcam"), webcam, cx))
                     .when_some(battery, |section, battery| {
                         section.child(Self::detail_row(text!("inspector.battery"), battery, cx))
                     })
@@ -925,6 +1037,7 @@ impl Render for PairCamApp {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.title_bar(cx))
+            .children(self.camera_banner(cx))
             .child(div().flex().flex_1().min_h_0().child(body))
     }
 }

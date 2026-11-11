@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use gpui_kit::component::TitleBar;
 use gpui_kit::{AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 use paircam_engine::Engine;
+use paircam_engine::vcam::VirtualCamera;
 
 mod app;
+mod camera;
 mod controls;
 mod gallery;
 mod settings;
@@ -90,6 +92,18 @@ fn main() {
 
     let (engine, channels) = Engine::new(&data_directory, host_name());
 
+    // Every decoded picture also goes to the virtual camera other apps see.
+    let camera = match VirtualCamera::start() {
+        Ok(camera) => {
+            engine.set_frame_sink(Box::new(camera.sink()));
+            Some(camera)
+        }
+        Err(error) => {
+            log::error!("cannot start the virtual camera feed: {error}");
+            None
+        }
+    };
+
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
@@ -129,6 +143,7 @@ fn main() {
                         show_settings: options.settings,
                         data_directory,
                         preferences,
+                        camera,
                     };
                     app::PairCamApp::new(engine, channels, startup, window, cx)
                 })

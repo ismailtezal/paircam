@@ -4527,6 +4527,7 @@ name = "paircam-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "gpui-kit",
  "image",
  "log",
