@@ -16,7 +16,13 @@ import { haptics } from '@/lib/haptics';
 import { setFaceTracking, setGestures, usePreferences } from '@/lib/preferences';
 
 /** The gestures explained in Settings, in the order they are listed. */
-const GESTURES = ['palm', 'frame', 'spread'] as const;
+// Face tracking is switched off in the camera engine for now, and with it the open-palm
+// gesture that toggles it. Turn this on together with `faceTrackingAvailable` in Swift.
+const FACE_TRACKING_AVAILABLE: boolean = false;
+
+const GESTURES = FACE_TRACKING_AVAILABLE
+  ? (['palm', 'frame', 'cross', 'spread'] as const)
+  : (['frame', 'cross', 'spread'] as const);
 
 /** Explanations of the gestures may wrap; they are the whole manual. */
 const GESTURE_BODY_LINES = 3;
@@ -110,18 +116,20 @@ export default function Settings() {
       </ListSection>
 
       <ListSection title={t('settings.handsFree.title')} footer={t('settings.handsFree.footer')}>
-        <ListRow
-          title={t('settings.handsFree.faceTracking')}
-          subtitle={t('settings.handsFree.faceTrackingHint')}
-          subtitleLines={HINT_LINES}
-          trailing={
-            <Switch
-              value={faceTracking}
-              onValueChange={setFaceTracking}
-              accessibilityLabel={t('settings.handsFree.faceTracking')}
-            />
-          }
-        />
+        {FACE_TRACKING_AVAILABLE ? (
+          <ListRow
+            title={t('settings.handsFree.faceTracking')}
+            subtitle={t('settings.handsFree.faceTrackingHint')}
+            subtitleLines={HINT_LINES}
+            trailing={
+              <Switch
+                value={faceTracking}
+                onValueChange={setFaceTracking}
+                accessibilityLabel={t('settings.handsFree.faceTracking')}
+              />
+            }
+          />
+        ) : null}
         <ListRow
           title={t('settings.handsFree.gestures')}
           subtitle={t('settings.handsFree.gesturesHint')}

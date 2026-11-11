@@ -73,12 +73,13 @@ enum GestureTuning {
     /// Zoom follows (distance now / distance at the start) raised to this power.
     static let spreadZoomExponent = 1.5
 
+    /// Two index fingers count as an X when the angle between them is in this range.
+    static let crossAngleDegrees = 40.0...140.0
+
     // MARK: Zoom targets
 
-    /// `frame` zooms to this factor...
-    static let frameZoom = 2.0
-    /// ...or back to 1× when the zoom is already above this factor.
-    static let frameZoomOutAbove = 1.5
+    /// `frame` multiplies the zoom by this factor and `cross` divides it, never below 1×.
+    static let zoomStep = 2.0
 }
 
 enum HandJoint: CaseIterable, Hashable {
@@ -165,6 +166,8 @@ enum HandShape: Hashable {
     case openPalm
     /// Thumb and index finger extended at about a right angle, the other three curled.
     case frame
+    /// Two hands with their index fingers crossed in an X. A two-hand shape: see `isCross`.
+    case cross
     case other
 }
 
@@ -272,6 +275,39 @@ enum HandGeometry {
         return acos(min(max(cosine, -1), 1)) * 180 / Double.pi
     }
 
+    /// Whether the segment from `a` to `b` crosses the segment from `c` to `d`.
+    static func segmentsCross(_ a: HandPoint, _ b: HandPoint, _ c: HandPoint, _ d: HandPoint) -> Bool {
+        func side(_ p: HandPoint, _ q: HandPoint, _ r: HandPoint) -> Double {
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+        }
+        let d1 = side(c, d, a)
+        let d2 = side(c, d, b)
+        let d3 = side(a, b, c)
+        let d4 = side(a, b, d)
+        return d1 * d2 < 0 && d3 * d4 < 0
+    }
+
+    /// Whether two hands hold their index fingers crossed in an X.
+    static func isCross(_ hands: [HandPose]) -> Bool {
+        guard hands.count == 2 else {
+            return false
+        }
+        let fingers = hands.compactMap { hand -> (base: HandPoint, tip: HandPoint)? in
+            guard isExtended(.index, in: hand), let base = hand[.indexMCP], let tip = hand[.indexTip] else {
+                return nil
+            }
+            return (base: base, tip: tip)
+        }
+        guard fingers.count == 2 else {
+            return false
+        }
+        let first = fingers[0]
+        let second = fingers[1]
+        let between = angle(first.base, first.tip, between: second.base, second.tip)
+        return GestureTuning.crossAngleDegrees.contains(between)
+            && segmentsCross(first.base, first.tip, second.base, second.tip)
+    }
+
     static func shape(of hand: HandPose) -> HandShape {
         guard isReliable(hand), let wrist = hand[.wrist], let middle = hand[.middleMCP] else {
             return .other
@@ -309,6 +345,7 @@ struct HandGestureRecognizer {
     enum Event: Equatable {
         case palm
         case frame
+        case cross
         case spreadBegan
         /// The distance between the hands now, divided by the distance when the spread began.
         case spreadChanged(scale: Double)
@@ -438,7 +475,7 @@ struct HandGestureRecognizer {
     private mutating func updateOneOff(hands: [HandPose], time: TimeInterval) -> Event? {
         let shapes = Set(hands.map { HandGeometry.shape(of: $0) }).subtracting([.other])
         // Two different gestures at once is ambiguous: neither counts.
-        let candidate = shapes.count == 1 ? shapes.first : nil
+        let candidate: HandShape? = HandGeometry.isCross(hands) ? .cross : (shapes.count == 1 ? shapes.first : nil)
 
         if let pending = released {
             if candidate == pending.shape {
@@ -475,6 +512,8 @@ struct HandGestureRecognizer {
             return .palm
         case .frame:
             return .frame
+        case .cross:
+            return .cross
         case .other:
             return nil
         }

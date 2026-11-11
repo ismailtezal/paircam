@@ -105,6 +105,7 @@ export type GestureKind =
   /** Thumb and index finger in an L, held for about a second: zooms to 2x or back to 1x. */
   | 'frame'
   /** Two hands moving apart or together: zooms continuously. */
+  | 'cross'
   | 'spread';
 
 export type GestureEvent = {

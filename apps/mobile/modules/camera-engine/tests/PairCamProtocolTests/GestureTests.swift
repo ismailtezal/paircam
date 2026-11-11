@@ -323,3 +323,27 @@ final class SpreadGestureTests: XCTestCase {
         XCTAssertEqual(again, [])
     }
 }
+
+final class CrossGeometryTests: XCTestCase {
+    func testCrossingSegmentsAreDetected() {
+        let a = HandPoint(x: 0, y: 0)
+        let b = HandPoint(x: 1, y: 1)
+        let c = HandPoint(x: 0, y: 1)
+        let d = HandPoint(x: 1, y: 0)
+        XCTAssertTrue(HandGeometry.segmentsCross(a, b, c, d))
+    }
+
+    func testSegmentsThatDoNotMeetAreNotACross() {
+        let a = HandPoint(x: 0, y: 0)
+        let b = HandPoint(x: 1, y: 0)
+        // Parallel.
+        XCTAssertFalse(HandGeometry.segmentsCross(a, b, HandPoint(x: 0, y: 1), HandPoint(x: 1, y: 1)))
+        // Pointing at each other without touching.
+        XCTAssertFalse(HandGeometry.segmentsCross(a, b, HandPoint(x: 2, y: -1), HandPoint(x: 2, y: 1)))
+    }
+
+    func testOneHandIsNeverACross() {
+        XCTAssertFalse(HandGeometry.isCross([]))
+        XCTAssertFalse(HandGeometry.isCross([HandPose(joints: [:])]))
+    }
+}

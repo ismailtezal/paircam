@@ -17,6 +17,7 @@ const GESTURE_VISIBLE_MS = 1500;
 const GESTURE_ICON: Record<GestureKind, IconName> = {
   palm: 'hand.raised',
   frame: 'plus.magnifyingglass',
+  cross: 'minus.magnifyingglass',
   spread: 'arrow.up.left.and.arrow.down.right',
 };
 

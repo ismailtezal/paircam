@@ -108,6 +108,7 @@
     "gesture": {
       "palm": "Open palm",
       "frame": "L shape",
+      "cross": "X shape",
       "spread": "Two hands"
     }
   },
@@ -132,15 +133,19 @@
       "footer": "Both start with every session. Your computer can turn them on or off too."
     },
     "gestures": {
-      "title": "Gestures",
       "palm": {
         "title": "Open palm",
         "body": "Hold an open hand up for a second to turn face tracking on or off."
       },
       "frame": {
         "title": "L shape",
-        "body": "Hold your thumb and index finger in an L for a second to zoom to 2× and back."
+        "body": "Hold your thumb and index finger in an L for a second to zoom in."
       },
+      "cross": {
+        "title": "X shape",
+        "body": "Cross your two index fingers in an X for a second to zoom out."
+      },
+      "title": "Gestures",
       "spread": {
         "title": "Two hands",
         "body": "Move two open hands apart to zoom in, or together to zoom out."

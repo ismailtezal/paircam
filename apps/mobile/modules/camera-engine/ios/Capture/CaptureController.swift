@@ -53,6 +53,10 @@ final class CaptureController: NSObject {
     /// `spread` faster so the picture keeps up with the hands.
     private static let zoomRampRate: Float = 3
     private static let frameZoomRampRate: Float = 2
+    /// Face tracking is switched off for now: turning it on froze the picture on a real phone.
+    /// While this is false the phone does not announce it, ignores requests for it and ignores
+    /// the open-palm gesture that toggles it.
+    private static let faceTrackingAvailable = false
     private static let spreadZoomRampRate: Float = 6
     /// How often a running zoom ramp is checked to see whether it has settled.
     private static let zoomSettleCheckInterval: TimeInterval = 0.1
@@ -543,8 +547,11 @@ final class CaptureController: NSObject {
         if modes.count > 1 {
             controls.stabilization = modes
         }
-        controls.faceTracking = true
-        controls.gestures = [.palm, .frame, .spread]
+        controls.faceTracking = CaptureController.faceTrackingAvailable
+        controls.gestures =
+            CaptureController.faceTrackingAvailable
+            ? [.palm, .frame, .cross, .spread]
+            : [.frame, .cross, .spread]
         return controls
     }
 
@@ -720,14 +727,15 @@ final class CaptureController: NSObject {
     // MARK: - Face tracking and gestures
 
     private func setVision(faceTracking newFaceTracking: Bool, gestures newGestures: Bool) {
-        let changed = newFaceTracking != faceTracking || newGestures != gestures
-        faceTracking = newFaceTracking
+        let tracking = newFaceTracking && CaptureController.faceTrackingAvailable
+        let changed = tracking != faceTracking || newGestures != gestures
+        faceTracking = tracking
         gestures = newGestures
-        analyzer.setOptions(VisionAnalyzer.Options(faceTracking: newFaceTracking, gestures: newGestures))
+        analyzer.setOptions(VisionAnalyzer.Options(faceTracking: tracking, gestures: newGestures))
         if changed {
             EngineLog.shared.info(
                 "vision",
-                "face tracking \(newFaceTracking ? "on" : "off"), gestures \(newGestures ? "on" : "off")"
+                "face tracking \(tracking ? "on" : "off"), gestures \(newGestures ? "on" : "off")"
             )
         }
     }
@@ -741,6 +749,9 @@ final class CaptureController: NSObject {
         }
         switch event {
         case .palm:
+            guard CaptureController.faceTrackingAvailable else {
+                return
+            }
             setVision(faceTracking: !faceTracking, gestures: gestures)
             EngineLog.shared.info("vision", "gesture palm: face tracking \(faceTracking ? "on" : "off")")
             onControlsChange?(controlState())
@@ -750,10 +761,20 @@ final class CaptureController: NSObject {
                 return
             }
             let current = currentZoom(of: camera)
-            let target = current > GestureTuning.frameZoomOutAbove ? 1.0 : GestureTuning.frameZoom
-            EngineLog.shared.info("vision", "gesture frame: zoom from \(current) to \(target)")
+            let target = current * GestureTuning.zoomStep
+            EngineLog.shared.info("vision", "gesture frame: zoom in from \(current) to \(target)")
             lockAndRampZoom(to: target, camera: camera, rate: CaptureController.frameZoomRampRate)
             onGesture?(GestureEvent(kind: .frame, phase: .recognised))
+        case .cross:
+            guard let camera = activeCamera else {
+                return
+            }
+            let current = currentZoom(of: camera)
+            // One step out, stopping at 1×. Below 1× (the ultra wide lens) it stays where it is.
+            let target = current > 1.0 ? max(current / GestureTuning.zoomStep, 1.0) : current
+            EngineLog.shared.info("vision", "gesture cross: zoom out from \(current) to \(target)")
+            lockAndRampZoom(to: target, camera: camera, rate: CaptureController.frameZoomRampRate)
+            onGesture?(GestureEvent(kind: .cross, phase: .recognised))
         case .spreadBegan:
             guard let camera = activeCamera else {
                 return

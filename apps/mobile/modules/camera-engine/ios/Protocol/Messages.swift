@@ -576,8 +576,10 @@ extension SubjectUpdate: Codable {
 enum GestureKind: String, Codable, Equatable {
     /// An open palm held up for about a second: toggles face tracking.
     case palm
-    /// Thumb and index finger in an L shape, held for about a second: zooms to 2× or back to 1×.
+    /// Thumb and index finger in an L shape, held for about a second: zooms in one step.
     case frame
+    /// Two index fingers crossed in an X, held for about a second: zooms out one step.
+    case cross
     /// Two hands moving apart or together: zooms continuously.
     case spread
     case unknown

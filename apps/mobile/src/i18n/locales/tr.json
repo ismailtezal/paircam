@@ -108,6 +108,7 @@
     "gesture": {
       "palm": "Açık avuç",
       "frame": "L işareti",
+      "cross": "X işareti",
       "spread": "İki el"
     }
   },
@@ -132,15 +133,19 @@
       "footer": "İkisi de her oturumla birlikte başlar. Bilgisayarınız da bunları açıp kapatabilir."
     },
     "gestures": {
-      "title": "Hareketler",
       "palm": {
         "title": "Açık avuç",
         "body": "Yüz takibini açmak ya da kapatmak için açık elinizi bir saniye havada tutun."
       },
       "frame": {
         "title": "L işareti",
-        "body": "2× yakınlaştırmak ve geri dönmek için baş ve işaret parmağınızla bir saniye L yapın."
+        "body": "Yakınlaştırmak için baş ve işaret parmağınızla bir saniye L yapın."
       },
+      "cross": {
+        "title": "X işareti",
+        "body": "Uzaklaştırmak için iki işaret parmağınızı bir saniye X şeklinde çaprazlayın."
+      },
+      "title": "Hareketler",
       "spread": {
         "title": "İki el",
         "body": "Yakınlaştırmak için iki açık elinizi birbirinden uzaklaştırın, uzaklaştırmak için yaklaştırın."
