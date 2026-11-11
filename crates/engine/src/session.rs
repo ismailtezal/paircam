@@ -24,8 +24,9 @@ const PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
 /// The phone answers a ping every second, so this much silence means it is gone.
 const SILENCE_TIMEOUT: Duration = Duration::from_secs(5);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
-/// The preview is capped at 30 pictures a second; the virtual camera gets every one.
-const PREVIEW_INTERVAL: Duration = Duration::from_millis(33);
+/// The preview follows the stream, up to 60 pictures a second. The virtual camera gets every
+/// picture regardless.
+const PREVIEW_INTERVAL: Duration = Duration::from_millis(15);
 const KEYFRAME_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 
 fn now_us() -> u64 {
@@ -453,6 +454,7 @@ impl Video {
             }
         };
         self.waiting_for_keyframe = false;
+        let (width, height) = (picture.width(), picture.height());
         self.counters.frames.fetch_add(1, Ordering::Relaxed);
         self.counters
             .decode_us
@@ -465,19 +467,28 @@ impl Video {
         let preview_due = self
             .last_preview
             .is_none_or(|last| last.elapsed() >= PREVIEW_INTERVAL);
-        if preview_due {
+        // Skip the work while the window still holds a picture it has not shown.
+        if preview_due && !inner.preview.is_full() {
             self.last_preview = Some(Instant::now());
             send_preview(&mut self.scaler, &picture, inner);
         }
 
-        // The GPU can refuse a stream on the first picture, which flips this to software.
+        // Report what was actually decoded. The GPU can refuse a stream on the first picture,
+        // which flips decoding to software, and the pictures are the authority on their size.
         let hardware = decoder.is_hardware();
-        if let Some(info) = self
-            .info
-            .as_mut()
-            .filter(|info| info.hardware_decoding != hardware)
-        {
+        if let Some(info) = self.info.as_mut().filter(|info| {
+            info.hardware_decoding != hardware || info.width != width || info.height != height
+        }) {
+            if info.width != width || info.height != height {
+                log::warn!(
+                    "the phone announced {}x{} but the pictures are {width}x{height}",
+                    info.width,
+                    info.height
+                );
+            }
             info.hardware_decoding = hardware;
+            info.width = width;
+            info.height = height;
             inner.emit(Event::Video(info.clone()));
         }
     }

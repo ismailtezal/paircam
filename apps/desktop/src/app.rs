@@ -841,7 +841,11 @@ impl PairCamApp {
 
     fn live_screen(&self, cx: &mut Context<Self>) -> AnyElement {
         let picture = match &self.preview {
+            // Pinned to the stage so the picture is fitted inside it whatever its shape. Left in
+            // the normal flow, a tall picture takes its height from its width and gets cropped.
             Some(image) => img(image.clone())
+                .absolute()
+                .inset_0()
                 .size_full()
                 .object_fit(ObjectFit::Contain)
                 .into_any_element(),
