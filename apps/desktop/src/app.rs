@@ -19,7 +19,9 @@ use gpui_kit::{
     div, img, px,
 };
 use image::{Frame, RgbaImage};
-use paircam_engine::protocol::{Capabilities, ControlValues, DEFAULT_PORT, Stats, Thermal};
+use paircam_engine::protocol::{
+    Capabilities, ControlValues, DEFAULT_PORT, LogEntry, Stats, Thermal,
+};
 use paircam_engine::vcam::VirtualCamera;
 use paircam_engine::{
     Channels, DiscoveredCamera, Engine, Event, Failure, LinkStats, PairedCamera, Phase,
@@ -312,9 +314,31 @@ impl PairCamApp {
             }
             Event::CameraLog(entry) => {
                 log::info!("phone [{}] {}", entry.tag, entry.message);
+                self.save_phone_log(&entry);
             }
         }
         cx.notify();
+    }
+
+    /// Appends a log line from the phone to `phone.log` in the app data folder, so problems
+    /// on the phone can be read on the computer.
+    fn save_phone_log(&self, entry: &LogEntry) {
+        use std::io::Write as _;
+
+        let path = self.data_directory.join("phone.log");
+        let line = format!(
+            "{:?} [{}] {}
+",
+            entry.level, entry.tag, entry.message
+        );
+        let result = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(line.as_bytes()));
+        if let Err(error) = result {
+            log::warn!("cannot write {}: {error}", path.display());
+        }
     }
 
     fn end_session(&mut self, window: &mut Window) {
