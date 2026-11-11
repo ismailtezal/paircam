@@ -9,9 +9,9 @@ import { tokens } from './src/theme/tokens';
 // new app record in App Store Connect, so settle it before the first TestFlight build.
 const BUNDLE_IDENTIFIER = 'app.paircam.ios';
 
-// The EAS project this app builds under. `eas init` prints the id; paste it here, because EAS
-// cannot write into a TypeScript config by itself.
-const EAS_PROJECT_ID: string | undefined = undefined;
+// The EAS project this app builds under (@ismailtezal/paircam). EAS cannot write into a
+// TypeScript config by itself, so the id from `eas init` is kept here.
+const EAS_PROJECT_ID: string | undefined = '8749a0bf-3b8f-4717-afa5-d2cac4dedf40';
 
 // The Bonjour service the camera advertises. See "Discovery" in docs/PROTOCOL.md.
 const BONJOUR_SERVICE = '_paircam._tcp';
