@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::colour::ColourSettings;
+
 /// The camera picture other apps receive, and the shape of the preview.
 pub const OUTPUT_WIDTH: u32 = 1920;
 pub const OUTPUT_HEIGHT: u32 = 1080;
@@ -253,6 +255,8 @@ pub struct PictureSettings {
     /// How closely face tracking frames the person, from 0 (wide, head and torso) to 1
     /// (close, head and shoulders).
     pub framing: f32,
+    /// The look and colour adjustments, applied to the finished frame.
+    pub colour: ColourSettings,
 }
 
 impl Default for PictureSettings {
@@ -265,6 +269,7 @@ impl Default for PictureSettings {
             zoom: MIN_ZOOM,
             center: Point { x: 0.5, y: 0.5 },
             framing: 0.5,
+            colour: ColourSettings::default(),
         }
     }
 }
@@ -289,6 +294,7 @@ impl PictureSettings {
             x: finite(self.center.x).clamp(half, 1.0 - half),
             y: finite(self.center.y).clamp(half, 1.0 - half),
         };
+        self.colour = self.colour.normalized();
         self
     }
 
@@ -297,11 +303,12 @@ impl PictureSettings {
         self.zoom > MIN_ZOOM + 0.001
     }
 
-    /// The settings back at their defaults, keeping the face tracking framing, which belongs
-    /// to the Tracking section rather than to the picture.
+    /// The settings back at their defaults, keeping the face tracking framing and the colour,
+    /// which belong to the Tracking and Colour sections rather than to the picture.
     pub fn reset(&self) -> Self {
         Self {
             framing: self.framing,
+            colour: self.colour,
             ..Self::default()
         }
     }

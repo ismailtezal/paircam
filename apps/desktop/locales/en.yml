@@ -91,6 +91,31 @@ picture:
   mirror: Mirror
   flip: Flip upside down
 
+colour:
+  title: COLOUR
+  reset: Reset
+  intensity: Intensity
+  adjust: Adjust
+  exposure: Exposure
+  contrast: Contrast
+  saturation: Saturation
+  temperature: Temperature
+  tint: Tint
+
+look:
+  none: Original
+  natural: Natural
+  crisp: Crisp
+  velvet: Velvet
+  golden: Golden
+  punch: Punch
+  nordic: Nordic
+  pastel: Pastel
+  cinema: Cinema
+  dusk: Dusk
+  vintage: Vintage
+  silver: Silver
+
 tracking:
   title: TRACKING
   face: Face tracking

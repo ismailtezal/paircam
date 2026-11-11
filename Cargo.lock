@@ -4908,6 +4908,7 @@ dependencies = [
  "async-channel",
  "bytes",
  "cc",
+ "image",
  "log",
  "paircam-protocol",
  "serde",

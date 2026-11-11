@@ -6,7 +6,8 @@ use std::ptr::NonNull;
 
 use paircam_protocol::Codec;
 
-use crate::picture::Plan;
+use crate::colour::ColourTables;
+use crate::picture::{PixelRect, Plan};
 
 #[repr(C)]
 struct RawFrame {
@@ -98,6 +99,67 @@ unsafe extern "C" {
         width: c_int,
         height: c_int,
     ) -> c_int;
+    fn pc_colour_nv12(
+        colour: *const ColourTables,
+        y: *mut u8,
+        y_stride: c_int,
+        uv: *mut u8,
+        uv_stride: c_int,
+        width: c_int,
+        height: c_int,
+    ) -> c_int;
+}
+
+/// Grades the `area` of `target` in place with `tables`. Every edge of the area must be even
+/// and inside the picture; the rest of the picture, such as black bars, is left alone.
+pub fn apply_colour(
+    tables: &ColourTables,
+    target: Nv12PlanesMut<'_>,
+    area: PixelRect,
+) -> Result<(), DecodeError> {
+    let even = |value: u32| value.is_multiple_of(2);
+    let inside = area
+        .x
+        .checked_add(area.width)
+        .is_some_and(|right| right <= target.width)
+        && area
+            .y
+            .checked_add(area.height)
+            .is_some_and(|bottom| bottom <= target.height);
+    if !target.as_planes().is_valid()
+        || !inside
+        || !even(area.x)
+        || !even(area.y)
+        || !even(area.width)
+        || !even(area.height)
+    {
+        return Err(DecodeError(
+            "the area to grade is not inside the picture".into(),
+        ));
+    }
+    if area.width == 0 || area.height == 0 {
+        return Ok(());
+    }
+    let y_start = area.y as usize * target.y_stride + area.x as usize;
+    let uv_start = (area.y / 2) as usize * target.uv_stride + area.x as usize;
+    // SAFETY: the planes were checked to hold the whole picture and the area lies inside it,
+    // so every row the C side touches is within the exclusive slices borrowed for the call.
+    let result = unsafe {
+        pc_colour_nv12(
+            tables,
+            target.y.as_mut_ptr().add(y_start),
+            target.y_stride as c_int,
+            target.uv.as_mut_ptr().add(uv_start),
+            target.uv_stride as c_int,
+            area.width as c_int,
+            area.height as c_int,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(error_from_code(result))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

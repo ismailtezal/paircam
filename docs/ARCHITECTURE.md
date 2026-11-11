@@ -67,6 +67,12 @@ The whole desktop app is Rust in one process: interface, engine and the feed to 
   crop (the user's zoom and pan, or the face tracking framing, eased with a critically damped
   spring) and the C layer crops, scales, turns, mirrors and flips it in one pass into the
   1920x1080 camera frame, fitted, filled or stretched. The settings are kept per computer.
+- **Colour:** the finished frame is then graded with the chosen look and the basic adjustments
+  (exposure, contrast, saturation, temperature, tint), inside the picture but not the bars. The
+  looks are data in `crates/engine/src/looks.rs`; `crates/engine/src/colour.rs` folds a look,
+  its intensity and the adjustments into lookup tables (a tone curve, a 256x256 chroma map,
+  and chroma gain and offset by luma), and the C layer applies them to NV12 directly, a few
+  lookups per 2x2 block with no RGB round trip, in about 2 to 3 ms per 1080p frame.
 - **Preview:** the same plan, scaled to the preview size as BGRA (up to 60 a second), so the
   preview shows exactly what other apps get. While an app uses the camera, the preview is
   scaled down from the camera frame itself; otherwise the transform renders straight at the

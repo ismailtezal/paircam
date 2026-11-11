@@ -22,10 +22,13 @@ use gpui_kit::{
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
     div, px,
 };
+use paircam_engine::LookId;
 use paircam_ui::tokens::{self, Palette, font};
 use paircam_ui::{
     LinkState, Stat, StatusDot, StatusPill, color, material, palette, panel, section_label,
 };
+
+use crate::colour::{look_swatches, look_tile};
 
 pub struct Gallery {
     input: Entity<InputState>,
@@ -247,6 +250,26 @@ impl Gallery {
             )
     }
 
+    /// The look tiles as the inspector shows them, the second one selected.
+    fn looks(cx: &Context<Self>) -> impl IntoElement {
+        Self::section("LOOKS", cx).child(
+            div()
+                .w(px(248.))
+                .grid()
+                .grid_cols(3)
+                .gap(px(tokens::space::S_1_5))
+                .children(LookId::ALL.iter().enumerate().map(|(index, look)| {
+                    look_tile(
+                        ("gallery-look", index),
+                        *look,
+                        &look_swatches(*look),
+                        index == 1,
+                        cx,
+                    )
+                })),
+        )
+    }
+
     fn feedback(cx: &Context<Self>) -> impl IntoElement {
         Self::section("FEEDBACK", cx)
             .child(
@@ -335,6 +358,7 @@ impl Render for Gallery {
                     .child(Self::buttons(cx))
                     .child(self.inputs(cx))
                     .child(Self::status(cx))
+                    .child(Self::looks(cx))
                     .child(Self::feedback(cx)),
             )
     }

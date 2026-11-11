@@ -8,8 +8,9 @@
 //!   preview is scaled down from that same frame;
 //! - otherwise straight into a preview-sized frame with the same plan.
 //!
-//! Either way the preview shows exactly what other apps get. A newer picture replaces one the
-//! thread has not started on, so delay never builds up.
+//! Either way the frame is then graded with the chosen look and colour adjustments (inside the
+//! picture, not the bars), so the preview shows exactly what other apps get. A newer picture
+//! replaces one the thread has not started on, so delay never builds up.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -18,9 +19,10 @@ use std::time::{Duration, Instant};
 
 use async_channel::Sender;
 
-use crate::decoder::{Nv12Frame, Nv12Planes, Nv12PlanesMut, Scaler};
+use crate::colour::{ColourSettings, ColourTables};
+use crate::decoder::{Nv12Frame, Nv12Planes, Nv12PlanesMut, Scaler, apply_colour};
 use crate::picture::{
-    Framer, OUTPUT_HEIGHT, OUTPUT_WIDTH, PictureSettings, Rect, SubjectState, View, plan,
+    Framer, OUTPUT_HEIGHT, OUTPUT_WIDTH, PictureSettings, PixelRect, Rect, SubjectState, View, plan,
 };
 use crate::{CameraFrame, FrameSink, PreviewFrame, lock};
 
@@ -95,6 +97,29 @@ impl Canvas {
             y_stride: self.width as usize,
             uv,
             uv_stride: self.width as usize,
+        }
+    }
+}
+
+/// The colour stage's tables, rebuilt only when the colour settings change.
+#[derive(Default)]
+struct ColourStage {
+    built_for: Option<ColourSettings>,
+    /// `None` when the settings change nothing, so the frame is not touched at all.
+    tables: Option<Box<ColourTables>>,
+}
+
+impl ColourStage {
+    /// Grades the picture inside `content` (the bars around it stay black).
+    fn apply(&mut self, settings: &ColourSettings, target: Nv12PlanesMut<'_>, content: PixelRect) {
+        if self.built_for != Some(*settings) {
+            self.tables = (!settings.is_identity()).then(|| ColourTables::build(settings));
+            self.built_for = Some(*settings);
+        }
+        if let Some(tables) = &self.tables
+            && let Err(error) = apply_colour(tables, target, content)
+        {
+            log::warn!("cannot grade a picture: {error}");
         }
     }
 }
@@ -314,6 +339,7 @@ fn run(shared: &Shared) {
     let mut bgra_scaler = Scaler::new();
     let mut camera = Canvas::new();
     let mut preview = Canvas::new();
+    let mut colour = ColourStage::default();
 
     loop {
         let (generation, picture) = {
@@ -353,6 +379,7 @@ fn run(shared: &Shared) {
             camera.resize(OUTPUT_WIDTH, OUTPUT_HEIGHT);
             match camera_scaler.transform_nv12(picture.planes(), &plan, camera.planes_mut()) {
                 Ok(()) => {
+                    colour.apply(&settings.colour, camera.planes_mut(), plan.content);
                     deliver(shared, generation, &picture, &camera);
                     if preview_due {
                         let (width, height) =
@@ -379,6 +406,7 @@ fn run(shared: &Shared) {
             let result = preview_scaler
                 .transform_nv12(picture.planes(), &plan, preview.planes_mut())
                 .and_then(|()| {
+                    colour.apply(&settings.colour, preview.planes_mut(), plan.content);
                     let mut pixels = Vec::new();
                     bgra_scaler
                         .planes_to_bgra(preview.planes(), width, height, &mut pixels)
@@ -434,6 +462,7 @@ fn deliver(shared: &Shared, generation: u64, picture: &Picture, camera: &Canvas)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::looks::LookId;
     use crate::picture::{FitMode, Rotation};
 
     /// A picture whose luma says where each pixel came from: the left half dark, the right
@@ -608,6 +637,142 @@ mod tests {
         let out = render(&picture, &PictureSettings::default(), right);
         assert_eq!(luma(&out, 10, 540), 220);
         assert_eq!(luma(&out, 1900, 1070), 220);
+    }
+
+    #[test]
+    fn a_look_grades_the_picture_but_not_the_bars() {
+        let picture = marked(1080, 1920);
+        let settings = PictureSettings {
+            colour: ColourSettings {
+                look: LookId::Dusk,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut out = render(&picture, &settings, Rect::FULL);
+        let (fixed, _) = plan(
+            Rect::FULL,
+            &settings,
+            (picture.width, picture.height),
+            (OUTPUT_WIDTH, OUTPUT_HEIGHT),
+        );
+        ColourStage::default().apply(&settings.colour, out.planes_mut(), fixed.content);
+        // The bars stay limited-range black with neutral chroma...
+        assert_eq!(luma(&out, 10, 540), 16);
+        assert_eq!(out.data[(OUTPUT_WIDTH * OUTPUT_HEIGHT) as usize], 128);
+        // ...while the picture is darker and its blacks lifted.
+        assert!(luma(&out, 1100, 900) < 220);
+        assert!(luma(&out, 900, 900) > 40);
+    }
+
+    #[test]
+    fn no_look_leaves_the_frame_untouched() {
+        let picture = marked(1920, 1080);
+        let settings = PictureSettings::default();
+        let mut out = render(&picture, &settings, Rect::FULL);
+        let before = out.data.clone();
+        let content = PixelRect {
+            x: 0,
+            y: 0,
+            width: OUTPUT_WIDTH,
+            height: OUTPUT_HEIGHT,
+        };
+        ColourStage::default().apply(&settings.colour, out.planes_mut(), content);
+        assert!(out.data == before);
+    }
+
+    /// What the colour stage costs per 1920x1080 frame, and what rebuilding its tables costs.
+    /// Run with
+    /// `cargo test --release -p paircam-engine colour_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn colour_cost() {
+        let (width, height) = (OUTPUT_WIDTH, OUTPUT_HEIGHT);
+        let luma_size = (width * height) as usize;
+        let mut state = 0x2545_f491_u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        // Like a camera picture: smooth light and colour with a little sensor noise.
+        let mut natural = vec![0u8; luma_size + luma_size / 2];
+        for (index, value) in natural.iter_mut().enumerate() {
+            let (x, y) = if index < luma_size {
+                (index % width as usize, index / width as usize)
+            } else {
+                (
+                    (index - luma_size) % width as usize,
+                    (index - luma_size) / width as usize * 2,
+                )
+            };
+            let (fx, fy) = (x as f32 / width as f32, y as f32 / height as f32);
+            let smooth = if index < luma_size {
+                30.0 + 180.0 * (0.5 + 0.5 * (fx * 7.0).sin() * (fy * 5.0).cos())
+            } else if index % 2 == 0 {
+                128.0 + 30.0 * (fx * 3.0 + fy * 4.0).sin()
+            } else {
+                128.0 + 30.0 * (fx * 5.0 - fy * 2.0).cos()
+            };
+            *value = (smooth + (next() % 7) as f32 - 3.0) as u8;
+        }
+        // The worst case: noise over a wide range of colour, so the chroma map is read all
+        // over and many blocks need pulling back into RGB.
+        let mut noisy = vec![0u8; luma_size + luma_size / 2];
+        for (index, value) in noisy.iter_mut().enumerate() {
+            let smooth = if index < luma_size {
+                (index % width as usize) * 200 / width as usize + 20
+            } else {
+                (index % width as usize) * 120 / width as usize + 68
+            };
+            *value = (smooth as u32 + next() % 24) as u8;
+        }
+        let content = PixelRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+        for look in [LookId::Natural, LookId::Cinema, LookId::Silver] {
+            let settings = ColourSettings {
+                look,
+                ..Default::default()
+            };
+            let rounds = 120;
+            let started = Instant::now();
+            for _ in 0..rounds {
+                std::hint::black_box(ColourTables::build(&settings));
+            }
+            let build = started.elapsed().as_secs_f64() * 1000.0 / f64::from(rounds);
+
+            let tables = ColourTables::build(&settings);
+            let mut times = Vec::new();
+            for data in [&natural, &noisy] {
+                let mut canvas = Canvas {
+                    width,
+                    height,
+                    data: data.clone(),
+                };
+                // Each frame timed alone, so the median and the best are not thrown off by
+                // whatever else the computer is doing.
+                let mut frames: Vec<f64> = (0..rounds)
+                    .map(|_| {
+                        canvas.data.copy_from_slice(data);
+                        let started = Instant::now();
+                        apply_colour(&tables, canvas.planes_mut(), content).unwrap();
+                        started.elapsed().as_secs_f64() * 1000.0
+                    })
+                    .collect();
+                frames.sort_by(f64::total_cmp);
+                times.push((frames[frames.len() / 2], frames[0]));
+            }
+            println!(
+                "{look:?}: {:.2} ms per 1080p frame like a camera's (best {:.2}), {:.2} ms for \
+                 noise (best {:.2}); {build:.2} ms to build the tables",
+                times[0].0, times[0].1, times[1].0, times[1].1
+            );
+        }
     }
 
     #[test]

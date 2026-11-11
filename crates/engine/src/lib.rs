@@ -17,8 +17,10 @@ use paircam_protocol::{
     Capabilities, Codec, ControlValues, DeviceId, Gesture, LogEntry, Message, Stats,
 };
 
+pub mod colour;
 pub mod decoder;
 pub mod discovery;
+pub mod looks;
 pub mod picture;
 mod pipeline;
 mod session;
@@ -26,8 +28,10 @@ mod store;
 #[cfg(windows)]
 pub mod vcam;
 
+pub use colour::ColourSettings;
 pub use decoder::Nv12Frame;
 pub use discovery::DiscoveredCamera;
+pub use looks::LookId;
 pub use picture::{FitMode, PictureSettings, Rotation};
 pub use store::{PairedCamera, StreamPreferences};
 #[cfg(windows)]

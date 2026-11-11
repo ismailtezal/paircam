@@ -104,6 +104,7 @@ export const tokens = {
     "1.5": 6
   },
   "radius": {
+    "xs": 4,
     "sm": 6,
     "md": 8,
     "lg": 12,
@@ -116,7 +117,8 @@ export const tokens = {
     "controlLg": 40,
     "touchTarget": 44,
     "icon": 16,
-    "titleBar": 36
+    "titleBar": 36,
+    "swatch": 12
   },
   "motion": {
     "duration": {

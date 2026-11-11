@@ -176,6 +176,24 @@ pub fn material(cx: &App) -> Div {
         .bg(color(palette.material))
 }
 
+/// A strip of colour swatches side by side, such as the preview of a look. Colours are
+/// `0xRRGGBBAA`, computed from data rather than picked by hand.
+pub fn swatch_strip(colours: impl IntoIterator<Item = u32>, cx: &App) -> Div {
+    div()
+        .h_flex()
+        .w_full()
+        .h(px(size::SWATCH))
+        .rounded(px(radius::XS))
+        .overflow_hidden()
+        .border_1()
+        .border_color(cx.theme().border)
+        .children(
+            colours
+                .into_iter()
+                .map(|colour| div().flex_1().h_full().bg(color(colour))),
+        )
+}
+
 /// A small heading above a group of controls.
 pub fn section_label(label: impl Into<SharedString>, cx: &App) -> Div {
     div()

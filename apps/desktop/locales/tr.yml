@@ -91,6 +91,31 @@ picture:
   mirror: Aynala
   flip: Ters çevir
 
+colour:
+  title: RENK
+  reset: Sıfırla
+  intensity: Yoğunluk
+  adjust: Ayarla
+  exposure: Pozlama
+  contrast: Kontrast
+  saturation: Doygunluk
+  temperature: Sıcaklık
+  tint: Renk tonu
+
+look:
+  none: Orijinal
+  natural: Doğal
+  crisp: Berrak
+  velvet: Kadife
+  golden: Altın
+  punch: Çarpıcı
+  nordic: Kuzey
+  pastel: Pastel
+  cinema: Sinema
+  dusk: Akşam
+  vintage: Nostalji
+  silver: Gümüş
+
 tracking:
   title: TAKİP
   face: Yüz takibi

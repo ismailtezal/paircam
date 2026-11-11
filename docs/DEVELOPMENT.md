@@ -54,11 +54,32 @@ To measure what the picture transform (crop, scale, rotate, mirror) costs per fr
 cargo test --release -p paircam-engine transform_cost -- --ignored --nocapture
 ```
 
+To measure the colour stage (a look applied to a 1080p frame) and its table rebuild:
+
+```bash
+cargo test --release -p paircam-engine colour_cost -- --ignored --nocapture
+```
+
 To check the receiving pipeline from a terminal, without the interface:
 
 ```bash
 cargo run -p paircam-engine --example headless -- 127.0.0.1:47810 --seconds 6 --save frame.bmp
 ```
+
+## Judging the looks
+
+The looks are defined in `crates/engine/src/looks.rs`. Judge changes on real pictures, not on
+the simulator's test pattern: the `looks` example applies every look to still images through
+the same C colour stage and writes one contact sheet per image, plus a sheet of skin-tone chips,
+grey ramps and each look's swatch strip:
+
+```bash
+cargo run --release -p paircam-engine --example looks -- --out <folder> --synthetic [image ...]
+```
+
+`--synthetic` adds three procedural portraits (fair, medium and deep skin under different
+light). Use only pictures you are licensed to use (CC0 or your own) and keep them out of the
+repository. `--time` times every look on each picture at 1920x1080 instead.
 
 ## Checks
 

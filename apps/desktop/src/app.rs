@@ -38,6 +38,7 @@ use paircam_ui::{
 use smallvec::SmallVec;
 
 use crate::camera::{self, CameraStatus};
+use crate::colour::ColourControls;
 use crate::controls::StreamControls;
 use crate::picture::{GestureNotice, PictureControls};
 use crate::settings::{self, Appearance, Preferences, SettingsView};
@@ -109,6 +110,7 @@ pub struct PairCamApp {
     /// How the picture is adjusted, as the engine last reported it.
     picture: PictureSettings,
     picture_controls: PictureControls,
+    colour_controls: ColourControls,
     gesture_notice: Option<GestureNotice>,
     next_notice_id: u64,
     /// Where the stage was last laid out, for turning drags into pans.
@@ -205,6 +207,7 @@ impl PairCamApp {
                 let updated = this.update_in(cx, |this, window, cx| {
                     this.picture = picture;
                     this.picture_controls.sync(&picture, window, cx);
+                    this.colour_controls.sync(&picture.colour, window, cx);
                     cx.notify();
                 });
                 if updated.is_err() {
@@ -225,6 +228,7 @@ impl PairCamApp {
         Self {
             picture,
             picture_controls: PictureControls::new(&picture, cx),
+            colour_controls: ColourControls::new(&picture.colour, cx),
             gesture_notice: None,
             next_notice_id: 0,
             stage_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -444,6 +448,10 @@ impl PairCamApp {
         self.engine.set_picture(picture);
         self.picture = self.engine.picture();
         cx.notify();
+    }
+
+    pub(crate) fn colour_controls_mut(&mut self) -> &mut ColourControls {
+        &mut self.colour_controls
     }
 
     /// Whether face tracking frames the picture right now, which leaves zoom and pan to it.
@@ -1255,6 +1263,7 @@ impl PairCamApp {
                 self.picture_controls
                     .render_picture(&self.picture, self.tracking(), cx),
             )
+            .child(self.colour_controls.render(&self.picture.colour, cx))
             .children(self.stream_controls.as_ref().and_then(|controls| {
                 self.picture_controls.render_tracking(
                     &controls.capabilities().controls,

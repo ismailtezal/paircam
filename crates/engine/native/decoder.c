@@ -3,7 +3,8 @@
 // It decodes H.264 or HEVC access units (length-prefixed NAL units, as the phone's encoder emits
 // them) into NV12 pictures in system memory, on the GPU through D3D11VA when available, and
 // converts NV12 to BGRA at any size for the preview. pc_transform_nv12 crops, scales, turns,
-// mirrors and flips NV12 pictures for the camera feed and the preview.
+// mirrors and flips NV12 pictures for the camera feed and the preview, and pc_colour_nv12 grades
+// them with a look's tables.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -564,5 +565,146 @@ int pc_transform_nv12(PcScaler *scaler, const PcFrame *frame, const PcTransform 
                       columns);
     remap(turned_uv, turned_width, content_uv, uv_stride, content_width / 2, content_height / 2,
           rows, columns, 2);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The colour stage: a look and the basic adjustments, as tables built in engine/src/colour.rs
+// ---------------------------------------------------------------------------------------------
+
+// Mirrors engine/src/colour.rs `ColourTables`.
+typedef struct PcColour {
+    // The tone curve, indexed by luma + the block's luma shift + 128.
+    uint8_t luma[512];
+    // Chroma gain by the block's average luma, in 1/4096.
+    int32_t gain[256];
+    // Chroma offsets by the block's average luma, in 1/4096 of a code.
+    int32_t offset_u[256];
+    int32_t offset_v[256];
+    // Whether to pull colours that would leave RGB back toward neutral.
+    int32_t gamut;
+    // 65536 / n, so the gamut limit multiplies instead of dividing.
+    int32_t reciprocals[1024];
+    // The chroma map, indexed by u << 8 | v, holding u' | v' << 8 | (luma shift + 128) << 16:
+    // the new chroma, and how far the block's luma moves for its colour (the luma mix).
+    uint32_t chroma[65536];
+} PcColour;
+
+#define PC_RECIPROCALS 1024
+
+#ifdef _MSC_VER
+#define PC_RESTRICT __restrict
+#else
+#define PC_RESTRICT restrict
+#endif
+
+static inline int clamp_byte(int value) {
+    return value < 0 ? 0 : (value > 255 ? 255 : value);
+}
+
+// How far R, G and B sit from luma per code of chroma, in luma codes times 4096 (BT.709,
+// limited range): R - Y = 1.5396 V, B - Y = 1.8142 U, G - Y = -(0.1831 U + 0.4577 V).
+#define PC_R_V 6306
+#define PC_B_U 7431
+#define PC_G_U 750
+#define PC_G_V 1875
+
+// How much of the chroma fits when a channel reaches `excess` (in luma codes times 4096) with
+// `room` luma codes left, in 1/4096, through the table of 65536 / n so nothing divides. The
+// excess is rounded up to whole codes, so the result errs toward fitting.
+static inline int fit(const int32_t *reciprocals, int room, int excess) {
+    int codes = (excess + 4095) >> 12;
+    codes = codes < 0 ? 0 : (codes < PC_RECIPROCALS ? codes : PC_RECIPROCALS - 1);
+    return (room * reciprocals[codes]) >> 4;
+}
+
+// Scales the chroma `*u`, `*v` (codes away from 128) toward neutral just enough that a block of
+// luma `luma` stays inside RGB, keeping its hue, instead of letting a channel clip. Past the
+// quick test, written without branches, which neighbouring blocks near the edge would take
+// unpredictably. Mirrored exactly by `ColourTables::keep_in_gamut`.
+static inline void keep_in_gamut(const int32_t *reciprocals, int luma, int *u, int *v) {
+    int above = luma - 16;
+    above = above < 0 ? 0 : (above > 219 ? 219 : above);
+    int below = 219 - above;
+    // Most colours are nowhere near the edge: no channel moves further from luma than the
+    // largest chroma times the largest coefficient, so if that fits, nothing needs doing.
+    int magnitude = *u < 0 ? -*u : *u;
+    int magnitude_v = *v < 0 ? -*v : *v;
+    magnitude = magnitude > magnitude_v ? magnitude : magnitude_v;
+    int room = above < below ? above : below;
+    if (magnitude * PC_B_U <= room << 12) {
+        return;
+    }
+    int r = *v * PC_R_V;
+    int g = -(*u * PC_G_U + *v * PC_G_V);
+    int b = *u * PC_B_U;
+    int high = r > g ? r : g;
+    high = high > b ? high : b;
+    int low = r < g ? r : g;
+    low = low < b ? low : b;
+    int over = fit(reciprocals, below, high);
+    int under = fit(reciprocals, above, -low);
+    int scale = high > below << 12 ? over : 4096;
+    int limit = -low > above << 12 ? under : 4096;
+    scale = limit < scale ? limit : scale;
+    *u = (*u * scale + 2048) >> 12;
+    *v = (*v * scale + 2048) >> 12;
+}
+
+// Grades every 2x2 block of an NV12 picture of `width` x `height` (both even) in place. Each
+// block costs a handful of table lookups; nothing is converted to RGB. `gamut` says whether to
+// keep colours inside RGB. Mirrored exactly by `ColourTables::apply_block`.
+static void colour_blocks(const PcColour *colour, uint8_t *y, int y_stride, uint8_t *uv,
+                          int uv_stride, int width, int height, int gamut) {
+    // Every table in a local restrict pointer: the pixel stores are bytes, which may alias
+    // anything, so reading through `colour` would reload each table after every store.
+    const uint8_t *PC_RESTRICT luma = colour->luma;
+    const int32_t *PC_RESTRICT gains = colour->gain;
+    const int32_t *PC_RESTRICT offsets_u = colour->offset_u;
+    const int32_t *PC_RESTRICT offsets_v = colour->offset_v;
+    const uint32_t *PC_RESTRICT map = colour->chroma;
+    const int32_t *PC_RESTRICT reciprocals = colour->reciprocals;
+
+    for (int row = 0; row < height; row += 2) {
+        uint8_t *PC_RESTRICT top = y + (ptrdiff_t)row * y_stride;
+        uint8_t *PC_RESTRICT bottom = top + y_stride;
+        uint8_t *PC_RESTRICT chroma = uv + (ptrdiff_t)(row / 2) * uv_stride;
+        for (int x = 0; x < width; x += 2) {
+            int u = chroma[x];
+            int v = chroma[x + 1];
+            int a = top[x];
+            int b = top[x + 1];
+            int c = bottom[x];
+            int d = bottom[x + 1];
+            int average = (a + b + c + d + 2) >> 2;
+
+            uint32_t mapped = map[(u << 8) | v];
+            const uint8_t *curve = luma + (mapped >> 16);
+            top[x] = curve[a];
+            top[x + 1] = curve[b];
+            bottom[x] = curve[c];
+            bottom[x + 1] = curve[d];
+
+            int gain = gains[average];
+            int out_u = ((int)(mapped & 0xFF) - 128) * gain + offsets_u[average] + 2048;
+            int out_v = ((int)((mapped >> 8) & 0xFF) - 128) * gain + offsets_v[average] + 2048;
+            out_u >>= 12;
+            out_v >>= 12;
+            if (gamut) {
+                keep_in_gamut(reciprocals, curve[average], &out_u, &out_v);
+            }
+            chroma[x] = (uint8_t)clamp_byte(128 + out_u);
+            chroma[x + 1] = (uint8_t)clamp_byte(128 + out_v);
+        }
+    }
+}
+
+// Grades an NV12 picture of `width` x `height` in place. Returns 0 on success.
+int pc_colour_nv12(const PcColour *colour, uint8_t *y, int y_stride, uint8_t *uv, int uv_stride,
+                   int width, int height) {
+    if (colour == NULL || !is_even(width) || !is_even(height) || width < 0 || height < 0) {
+        return AVERROR(EINVAL);
+    }
+    colour_blocks(colour, y, y_stride, uv, uv_stride, width, height, colour->gamut != 0);
     return 0;
 }

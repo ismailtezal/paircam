@@ -13,6 +13,7 @@ use paircam_engine::vcam::VirtualCamera;
 
 mod app;
 mod camera;
+mod colour;
 mod controls;
 mod gallery;
 mod picture;

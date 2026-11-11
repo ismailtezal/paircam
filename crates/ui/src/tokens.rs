@@ -148,6 +148,7 @@ pub mod space {
 
 /// Corner radii in pixels.
 pub mod radius {
+    pub const XS: f32 = 4.0;
     pub const SM: f32 = 6.0;
     pub const MD: f32 = 8.0;
     pub const LG: f32 = 12.0;
@@ -163,6 +164,7 @@ pub mod size {
     pub const TOUCH_TARGET: f32 = 44.0;
     pub const ICON: f32 = 16.0;
     pub const TITLE_BAR: f32 = 36.0;
+    pub const SWATCH: f32 = 12.0;
 }
 
 pub mod motion {
