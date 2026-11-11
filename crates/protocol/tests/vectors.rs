@@ -160,13 +160,33 @@ fn vectors() -> Value {
     })
 }
 
+/// Rebuilds every object with its keys in alphabetical order. `serde_json` keeps insertion order
+/// instead when another crate in the build turns on its `preserve_order` feature, and the file
+/// must not depend on that.
+fn sorted(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, sorted(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
+        other => other,
+    }
+}
+
 fn vectors_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../protocol/vectors/v0.json")
 }
 
 #[test]
 fn vectors_file_matches_the_implementation() {
-    let expected = serde_json::to_string_pretty(&vectors()).unwrap() + "\n";
+    let expected = serde_json::to_string_pretty(&sorted(vectors())).unwrap() + "\n";
     let path = vectors_path();
 
     if std::env::var_os("PAIRCAM_UPDATE_VECTORS").is_some() {
