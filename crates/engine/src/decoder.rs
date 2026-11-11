@@ -57,6 +57,17 @@ unsafe extern "C" {
         bgra_height: c_int,
         bgra_stride: c_int,
     ) -> c_int;
+    #[allow(clippy::too_many_arguments)]
+    fn pc_scaler_nv12_to_nv12(
+        scaler: *mut RawScaler,
+        frame: *const RawFrame,
+        y: *mut u8,
+        y_stride: c_int,
+        uv: *mut u8,
+        uv_stride: c_int,
+        width: c_int,
+        height: c_int,
+    ) -> c_int;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -266,6 +277,109 @@ impl Scaler {
         } else {
             Err(error_from_code(result))
         }
+    }
+
+    /// Scales an NV12 picture in memory into `target`, at the target's size. The target planes
+    /// may be a window inside a larger picture, which is how the virtual camera letterboxes.
+    ///
+    /// Use a separate scaler from the one used for [`Scaler::nv12_to_bgra`], or the FFmpeg
+    /// context is rebuilt on every switch.
+    pub fn nv12_to_nv12(
+        &mut self,
+        source: Nv12Planes<'_>,
+        target: Nv12PlanesMut<'_>,
+    ) -> Result<(), DecodeError> {
+        if !source.is_valid() || !target.as_planes().is_valid() {
+            return Err(DecodeError(
+                "NV12 planes are too small for their size".into(),
+            ));
+        }
+        let raw = RawFrame {
+            width: source.width as i32,
+            height: source.height as i32,
+            pts: 0,
+            y: source.y.as_ptr(),
+            y_stride: source.y_stride as i32,
+            uv: source.uv.as_ptr(),
+            uv_stride: source.uv_stride as i32,
+        };
+        // SAFETY: both pictures were checked to fit their slices, which stay borrowed for the
+        // call, and the target slices are exclusive.
+        let result = unsafe {
+            pc_scaler_nv12_to_nv12(
+                self.raw.as_ptr(),
+                &raw,
+                target.y.as_mut_ptr(),
+                target.y_stride as c_int,
+                target.uv.as_mut_ptr(),
+                target.uv_stride as c_int,
+                target.width as c_int,
+                target.height as c_int,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(error_from_code(result))
+        }
+    }
+}
+
+/// An NV12 picture in memory: a luma plane and an interleaved chroma plane, each with a stride.
+#[derive(Clone, Copy)]
+pub struct Nv12Planes<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub y: &'a [u8],
+    pub y_stride: usize,
+    pub uv: &'a [u8],
+    pub uv_stride: usize,
+}
+
+/// A writable [`Nv12Planes`].
+pub struct Nv12PlanesMut<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub y: &'a mut [u8],
+    pub y_stride: usize,
+    pub uv: &'a mut [u8],
+    pub uv_stride: usize,
+}
+
+impl Nv12PlanesMut<'_> {
+    fn as_planes(&self) -> Nv12Planes<'_> {
+        Nv12Planes {
+            width: self.width,
+            height: self.height,
+            y: self.y,
+            y_stride: self.y_stride,
+            uv: self.uv,
+            uv_stride: self.uv_stride,
+        }
+    }
+}
+
+impl Nv12Planes<'_> {
+    /// Whether both planes hold every row the size calls for, and the size fits FFmpeg.
+    fn is_valid(&self) -> bool {
+        fn fits(len: usize, stride: usize, rows: usize, row_bytes: usize) -> bool {
+            stride >= row_bytes && len >= stride * (rows - 1) + row_bytes
+        }
+        let width = self.width as usize;
+        let height = self.height as usize;
+        width > 0
+            && height > 0
+            && self.width <= i32::MAX as u32
+            && self.height <= i32::MAX as u32
+            && self.y_stride <= i32::MAX as usize
+            && self.uv_stride <= i32::MAX as usize
+            && fits(self.y.len(), self.y_stride, height, width)
+            && fits(
+                self.uv.len(),
+                self.uv_stride,
+                height.div_ceil(2),
+                width.div_ceil(2) * 2,
+            )
     }
 }
 

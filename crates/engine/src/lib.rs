@@ -17,10 +17,14 @@ pub mod decoder;
 pub mod discovery;
 mod session;
 mod store;
+#[cfg(windows)]
+pub mod vcam;
 
 pub use decoder::Nv12Frame;
 pub use discovery::DiscoveredCamera;
 pub use store::{PairedCamera, StreamPreferences};
+#[cfg(windows)]
+pub use vcam::{VirtualCamera, VirtualCameraSink};
 
 /// Where the connection to a phone stands.
 #[derive(Clone, Debug, PartialEq)]

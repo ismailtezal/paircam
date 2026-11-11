@@ -261,3 +261,28 @@ int pc_scaler_nv12_to_bgra(PcScaler *scaler, const PcFrame *frame, uint8_t *bgra
     sws_scale(scaler->context, source, source_stride, 0, frame->height, target, target_stride);
     return 0;
 }
+
+// ---------------------------------------------------------------------------------------------
+// NV12 to NV12 at another size, for the virtual camera
+// ---------------------------------------------------------------------------------------------
+
+// Scales an NV12 picture into caller-provided NV12 planes of `width` x `height`. The target
+// planes may sit inside a larger picture (for letterboxing). Use a scaler of its own for this:
+// alternating with nv12_to_bgra on one scaler would rebuild the context every call.
+// Returns 0 on success.
+int pc_scaler_nv12_to_nv12(PcScaler *scaler, const PcFrame *frame, uint8_t *y, int y_stride,
+                           uint8_t *uv, int uv_stride, int width, int height) {
+    scaler->context = sws_getCachedContext(scaler->context, frame->width, frame->height,
+                                           AV_PIX_FMT_NV12, width, height, AV_PIX_FMT_NV12,
+                                           SWS_BICUBIC, NULL, NULL, NULL);
+    if (scaler->context == NULL) {
+        return AVERROR(EINVAL);
+    }
+
+    const uint8_t *const source[4] = {frame->y, frame->uv, NULL, NULL};
+    const int source_stride[4] = {frame->y_stride, frame->uv_stride, 0, 0};
+    uint8_t *const target[4] = {y, uv, NULL, NULL};
+    const int target_stride[4] = {y_stride, uv_stride, 0, 0};
+    sws_scale(scaler->context, source, source_stride, 0, frame->height, target, target_stride);
+    return 0;
+}
