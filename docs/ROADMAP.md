@@ -49,6 +49,9 @@ passes the checks that can run on Windows, but has not run on a real device yet.
 - [x] Custom title bar
 - [ ] Tray icon, start with Windows
 - [ ] Installer that registers the camera, signed builds, silent auto-update
+- [ ] Away screen: a video, picture or card with a message while nobody is in the picture,
+      automatic or by hand. Written; seen working end to end with the simulator, not yet with
+      a real phone and a real person, where the detection thresholds still need tuning.
 - [ ] USB connection
 - [ ] App Store release
 

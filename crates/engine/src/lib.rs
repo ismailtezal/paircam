@@ -2,7 +2,8 @@
 //!
 //! It connects to a phone, pairs or resumes, receives and decodes the video, adjusts each
 //! picture as the user asked (crop, zoom, rotation, mirror, face tracking; see [`picture`]),
-//! and hands the result to the preview and to a [`FrameSink`] (the virtual camera). It runs on
+//! swaps in the away screen while the user is not there (see [`away`]), and hands the result
+//! to the preview and to a [`FrameSink`] (the virtual camera). It runs on
 //! its own threads and talks to the interface through channels: [`Event`]s, the latest
 //! [`PreviewFrame`], and the [`PictureSettings`] whenever they change.
 
@@ -17,17 +18,23 @@ use paircam_protocol::{
     Capabilities, Codec, ControlValues, DeviceId, Gesture, LogEntry, Message, Stats,
 };
 
+pub mod away;
 pub mod colour;
 pub mod decoder;
 pub mod discovery;
 pub mod looks;
+mod media;
 pub mod picture;
 mod pipeline;
+mod presence;
+mod screen;
 mod session;
 mod store;
+mod text;
 #[cfg(windows)]
 pub mod vcam;
 
+pub use away::{AwayMedia, AwaySettings, AwayStatus};
 pub use colour::ColourSettings;
 pub use decoder::Nv12Frame;
 pub use discovery::DiscoveredCamera;
@@ -112,6 +119,9 @@ pub enum Event {
     CameraLog(LogEntry),
     /// The phone recognised a hand gesture and acted on it.
     Gesture(Gesture),
+    /// The away screen started or stopped showing, the person came or went, or the chosen
+    /// file turned out playable or not.
+    Away(AwayStatus),
 }
 
 /// A picture for the preview: tightly packed BGRA, already scaled down. It has the camera
@@ -158,6 +168,8 @@ pub(crate) struct Inner {
     pub(crate) host_name: String,
     /// Everyone who asked to hear about picture setting changes.
     picture_watchers: Mutex<Vec<Sender<PictureSettings>>>,
+    /// The away screen's message when the user has not written one, in the app's language.
+    away_fallback_message: Mutex<String>,
     session: Mutex<Option<Arc<session::Shared>>>,
     next_session_id: AtomicU64,
     /// Kept alive so the search for phones runs as long as the engine does.
@@ -203,13 +215,15 @@ impl Engine {
                 let _ = discovered.try_send(Event::Discovered(cameras));
             });
         let store = store::Store::open(data_directory);
-        let pipeline = pipeline::Pipeline::new(preview, *store.picture());
+        let pipeline =
+            pipeline::Pipeline::new(preview, events.clone(), *store.picture(), store.away());
         let inner = Arc::new(Inner {
             events,
             store: Mutex::new(store),
             pipeline,
             host_name: host_name.into(),
             picture_watchers: Mutex::new(Vec::new()),
+            away_fallback_message: Mutex::new(String::new()),
             session: Mutex::new(None),
             next_session_id: AtomicU64::new(1),
             _discovery: discovery,
@@ -273,6 +287,42 @@ impl Engine {
         let (sender, receiver) = async_channel::unbounded();
         lock(&self.inner.picture_watchers).push(sender);
         receiver
+    }
+
+    /// The away screen as the user set it up.
+    pub fn away(&self) -> AwaySettings {
+        lock(&self.inner.store).away().clone()
+    }
+
+    /// Changes the away screen, saves it and applies it right away.
+    pub fn set_away(&self, settings: AwaySettings) {
+        let settings = settings.normalized();
+        let fallback = lock(&self.inner.away_fallback_message).clone();
+        self.inner.pipeline.set_away(&settings, &fallback);
+        lock(&self.inner.store).set_away(settings);
+    }
+
+    /// The message the away screen shows until the user writes their own. The interface sets
+    /// it at startup, in its language.
+    pub fn set_away_fallback_message(&self, message: &str) {
+        *lock(&self.inner.away_fallback_message) = message.to_owned();
+        self.inner.pipeline.set_away(&self.away(), message);
+    }
+
+    /// Shows the away screen until told otherwise, whoever is in the picture. Not saved: the
+    /// app always starts with the live picture.
+    pub fn set_away_now(&self, on: bool) {
+        self.inner.pipeline.set_away_now(on);
+    }
+
+    /// Whether the user asked for the away screen by hand.
+    pub fn away_now(&self) -> bool {
+        self.inner.pipeline.away_now()
+    }
+
+    /// What the away screen is doing. Changes arrive as [`Event::Away`].
+    pub fn away_status(&self) -> AwayStatus {
+        self.inner.pipeline.away_status()
     }
 
     /// Connects to the phone at `address`, replacing any current connection. Progress arrives

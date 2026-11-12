@@ -48,6 +48,11 @@ performs open palm, frame and spread in turn every few seconds and acts on them 
 does. Both are off until the desktop turns them on; `--tracking` and `--gestures` start with them
 on, and `--gesture-seconds <s>` sets the pace.
 
+For the away screen, `--room` swaps the moving pattern for a still picture and gives the person
+a body, so the picture is empty and still while they are out (about five seconds in every
+thirty). The Windows face detector does not take the orange square for a face, so this
+exercises the movement side of the detection; faces are checked on photos, below.
+
 To measure what the picture transform (crop, scale, rotate, mirror) costs per frame:
 
 ```bash
@@ -65,6 +70,43 @@ To check the receiving pipeline from a terminal, without the interface:
 ```bash
 cargo run -p paircam-engine --example headless -- 127.0.0.1:47810 --seconds 6 --save frame.bmp
 ```
+
+The same example tries the away screen: `--away <seconds>` turns the automatic switch on with
+that delay, `--away-media <file>` and `--away-message <text>` set what it shows, and
+`--away-now` shows it from the start. It prints every change (someone in the picture or not,
+the away screen showing or not) with its time, and `--save` then keeps the picture from one
+second after the away screen first showed:
+
+```bash
+cargo run -p paircam-engine --example simulator -- --port 47816 --room
+```
+
+```bash
+cargo run -p paircam-engine --example headless -- 127.0.0.1:47816 --seconds 26 --away 2 --away-media clip.mp4 --save away.bmp
+```
+
+## Checking the away screen
+
+Two checks are for looking at, not for asserting, so they are ignored by default. The first
+writes pictures of the away screen (the first picture, after one and three seconds of playing,
+and after stopping) for a video or still picture, or for the plain card when
+`PAIRCAM_AWAY_MEDIA` is not set; `PAIRCAM_AWAY_MESSAGE` changes the message:
+
+```bash
+PAIRCAM_AWAY_OUT=<folder> PAIRCAM_AWAY_MEDIA=<file> cargo test -p paircam-engine away_screen_pictures -- --ignored --nocapture
+```
+
+The second runs the Windows face detector over a folder of pictures, each cropped to a camera
+frame and shrunk as the engine does, and prints where it found a face and how long it took:
+
+```bash
+PAIRCAM_FACE_PHOTOS=<folder> cargo test -p paircam-engine faces_in_photos -- --ignored --nocapture
+```
+
+Use only pictures you are licensed to use and keep them out of the repository. To see what the
+detection reads from a live stream (face, movement, how much the seat changed), start the app
+from a terminal with `PAIRCAM_TRACE=paircam_engine::presence`; the variable takes a comma
+separated list of modules to log in full.
 
 ## Judging the looks
 

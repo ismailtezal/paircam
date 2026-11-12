@@ -12,6 +12,7 @@ use paircam_engine::Engine;
 use paircam_engine::vcam::VirtualCamera;
 
 mod app;
+mod away;
 mod camera;
 mod colour;
 mod controls;
@@ -78,9 +79,17 @@ fn host_name() -> String {
 }
 
 fn main() {
-    let _ = simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
-        .init();
+    let mut logger = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Info);
+    // For development: `PAIRCAM_TRACE=paircam_engine::presence` logs those modules (comma
+    // separated) in full.
+    if let Ok(modules) = std::env::var("PAIRCAM_TRACE") {
+        for module in modules.split(',').map(str::trim) {
+            if !module.is_empty() {
+                logger = logger.with_module_level(module, log::LevelFilter::Trace);
+            }
+        }
+    }
+    let _ = logger.init();
 
     let options = options();
     // A second copy only brings the first one's window forward. The gallery and runs with their

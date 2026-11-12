@@ -11,7 +11,12 @@
 //! Either way the frame is then graded with the chosen look and colour adjustments (inside the
 //! picture, not the bars), so the preview shows exactly what other apps get. A newer picture
 //! replaces one the thread has not started on, so delay never builds up.
+//!
+//! The thread also runs the away screen ([`crate::away`]): it hands a small copy of the
+//! picture to the presence detector a few times a second and, while the person is away or the
+//! user asked for it, cross-fades the finished frame to the away screen's picture.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -19,12 +24,15 @@ use std::time::{Duration, Instant};
 
 use async_channel::Sender;
 
+use crate::away::{AwayMedia, AwaySettings, AwayStatus, Fade, Watch, blend};
 use crate::colour::{ColourSettings, ColourTables};
 use crate::decoder::{Nv12Frame, Nv12Planes, Nv12PlanesMut, Scaler, apply_colour};
 use crate::picture::{
     Framer, OUTPUT_HEIGHT, OUTPUT_WIDTH, PictureSettings, PixelRect, Rect, SubjectState, View, plan,
 };
-use crate::{CameraFrame, FrameSink, PreviewFrame, lock};
+use crate::presence::{self, Detector};
+use crate::screen::AwayScreen;
+use crate::{CameraFrame, Event, FrameSink, PreviewFrame, lock};
 
 /// The preview follows the stream, up to 60 pictures a second. The virtual camera gets every
 /// picture regardless.
@@ -53,14 +61,14 @@ impl Picture {
 }
 
 /// A tightly packed NV12 buffer of a fixed size, reused frame after frame.
-struct Canvas {
-    width: u32,
-    height: u32,
-    data: Vec<u8>,
+pub(crate) struct Canvas {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) data: Vec<u8>,
 }
 
 impl Canvas {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             width: 0,
             height: 0,
@@ -68,14 +76,21 @@ impl Canvas {
         }
     }
 
-    fn resize(&mut self, width: u32, height: u32) {
+    pub(crate) fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
         self.data
             .resize(width as usize * height as usize * 3 / 2, 0);
     }
 
-    fn planes(&self) -> Nv12Planes<'_> {
+    /// Paints the whole picture one grey.
+    pub(crate) fn fill(&mut self, luma: u8) {
+        let luma_size = self.width as usize * self.height as usize;
+        self.data[..luma_size].fill(luma);
+        self.data[luma_size..].fill(128);
+    }
+
+    pub(crate) fn planes(&self) -> Nv12Planes<'_> {
         let luma = self.width as usize * self.height as usize;
         Nv12Planes {
             width: self.width,
@@ -87,7 +102,7 @@ impl Canvas {
         }
     }
 
-    fn planes_mut(&mut self) -> Nv12PlanesMut<'_> {
+    pub(crate) fn planes_mut(&mut self) -> Nv12PlanesMut<'_> {
         let luma = self.width as usize * self.height as usize;
         let (y, uv) = self.data.split_at_mut(luma);
         Nv12PlanesMut {
@@ -138,7 +153,28 @@ struct Timing {
     total_us: AtomicU64,
 }
 
+/// The away screen as the picture thread needs it.
+struct AwayControl {
+    automatic: bool,
+    delay: Duration,
+    /// The user asked for the away screen by hand.
+    forced: bool,
+    screen: Arc<AwayScreen>,
+    /// What the current screen was built from, so other changes do not rebuild it.
+    built_for: (Option<PathBuf>, String),
+}
+
+/// What the interface was last told, and which screen may still report about its file.
+#[derive(Default)]
+struct AwayReport {
+    status: AwayStatus,
+    screen: u64,
+}
+
 struct Shared {
+    events: Sender<Event>,
+    away: Mutex<AwayControl>,
+    away_report: Arc<Mutex<AwayReport>>,
     preview: Sender<PreviewFrame>,
     preview_max_width: AtomicU32,
     sink: Mutex<Option<Box<dyn FrameSink>>>,
@@ -168,6 +204,48 @@ impl Shared {
         !self.preview.is_full()
             && lock(&self.last_preview).is_none_or(|last| last.elapsed() >= PREVIEW_INTERVAL)
     }
+
+    /// Changes what the interface knows about the away screen, and tells it if that differs.
+    fn report_away(&self, change: impl FnOnce(&mut AwayStatus)) {
+        report_away(&self.away_report, &self.events, change);
+    }
+}
+
+fn report_away(
+    report: &Mutex<AwayReport>,
+    events: &Sender<Event>,
+    change: impl FnOnce(&mut AwayStatus),
+) {
+    let mut report = lock(report);
+    let before = report.status;
+    change(&mut report.status);
+    if report.status != before {
+        // The interface owns the receiver for the whole run; a closed channel means shutdown.
+        let _ = events.try_send(Event::Away(report.status));
+    }
+}
+
+/// Builds the away screen for a file and a message. Its file's fate is reported as long as it
+/// is still the current screen.
+fn build_screen(
+    media: Option<&Path>,
+    message: &str,
+    report: &Arc<Mutex<AwayReport>>,
+    events: &Sender<Event>,
+) -> Arc<AwayScreen> {
+    let id = {
+        let mut report = lock(report);
+        report.screen += 1;
+        report.screen
+    };
+    report_away(report, events, |status| status.media = AwayMedia::Card);
+    let (report, events) = (report.clone(), events.clone());
+    Arc::new(AwayScreen::new(media, message, move |state| {
+        let current = lock(&report).screen == id;
+        if current {
+            report_away(&report, &events, |status| status.media = state);
+        }
+    }))
 }
 
 pub(crate) struct Pipeline {
@@ -176,8 +254,26 @@ pub(crate) struct Pipeline {
 }
 
 impl Pipeline {
-    pub(crate) fn new(preview: Sender<PreviewFrame>, settings: PictureSettings) -> Self {
+    pub(crate) fn new(
+        preview: Sender<PreviewFrame>,
+        events: Sender<Event>,
+        settings: PictureSettings,
+        away: &AwaySettings,
+    ) -> Self {
+        let away_report = Arc::new(Mutex::new(AwayReport::default()));
+        // The app's default message arrives with the first `set_away`.
+        let message = away.message.clone().unwrap_or_default();
+        let screen = build_screen(away.media.as_deref(), &message, &away_report, &events);
         let shared = Arc::new(Shared {
+            events,
+            away: Mutex::new(AwayControl {
+                automatic: away.automatic,
+                delay: Duration::from_secs_f32(away.delay),
+                forced: false,
+                screen,
+                built_for: (away.media.clone(), message),
+            }),
+            away_report,
             preview,
             preview_max_width: AtomicU32::new(1280),
             sink: Mutex::new(None),
@@ -242,6 +338,48 @@ impl Pipeline {
         self.shared.panning.store(false, Ordering::Relaxed);
     }
 
+    /// Applies the away screen settings. `fallback_message` stands in when the user has not
+    /// written a message of their own.
+    pub(crate) fn set_away(&self, settings: &AwaySettings, fallback_message: &str) {
+        let shared = &self.shared;
+        let message = settings
+            .message
+            .clone()
+            .unwrap_or_else(|| fallback_message.to_owned());
+        let spec = (settings.media.clone(), message);
+        let mut away = lock(&shared.away);
+        away.automatic = settings.automatic;
+        away.delay = Duration::from_secs_f32(settings.delay);
+        if away.built_for != spec {
+            let screen = build_screen(
+                spec.0.as_deref(),
+                &spec.1,
+                &shared.away_report,
+                &shared.events,
+            );
+            let old = std::mem::replace(&mut away.screen, screen);
+            away.built_for = spec;
+            drop(away);
+            // Closing a file can take a moment, and the caller is the interface.
+            let _ = thread::Builder::new()
+                .name("paircam-away-close".into())
+                .spawn(move || drop(old));
+        }
+    }
+
+    /// Shows the away screen until told otherwise, whoever is in the picture.
+    pub(crate) fn set_away_now(&self, on: bool) {
+        lock(&self.shared.away).forced = on;
+    }
+
+    pub(crate) fn away_now(&self) -> bool {
+        lock(&self.shared.away).forced
+    }
+
+    pub(crate) fn away_status(&self) -> AwayStatus {
+        lock(&self.shared.away_report).status
+    }
+
     /// Face tracking turned on or off on the phone.
     pub(crate) fn set_tracking(&self, enabled: bool) {
         let mut subject = lock(&self.shared.subject);
@@ -303,6 +441,12 @@ impl Pipeline {
         }
         *lock(&shared.subject) = SubjectState::default();
         *lock(&shared.view) = None;
+        // Nothing is watching or showing without a stream.
+        lock(&shared.away).screen.set_playing(false);
+        shared.report_away(|status| {
+            status.showing = false;
+            status.in_picture = None;
+        });
         // Under the sink's lock, so a frame finished before this cannot land after it.
         if let Some(sink) = lock(&shared.sink).as_mut() {
             sink.stopped();
@@ -332,7 +476,12 @@ fn preview_size(max_width: u32) -> (u32, u32) {
 /// The picture thread.
 fn run(shared: &Shared) {
     let mut framer = Framer::new();
-    let mut framer_generation = 0;
+    // No stream yet: the first picture starts one.
+    let mut framer_generation = u64::MAX;
+    let mut detector: Option<Detector> = None;
+    let mut watch = Watch::default();
+    let mut fade = Fade::default();
+    let mut last_sample: Option<Instant> = None;
     // One scaler per target size, so FFmpeg's contexts are not rebuilt every frame.
     let mut camera_scaler = Scaler::new();
     let mut preview_scaler = Scaler::new();
@@ -357,10 +506,54 @@ fn run(shared: &Shared) {
                     .unwrap_or_else(PoisonError::into_inner);
             }
         };
-        if generation != framer_generation {
+        let new_stream = generation != framer_generation;
+        if new_stream {
             framer = Framer::new();
             framer_generation = generation;
         }
+
+        // The away screen: watch for the person, and ease towards it or back.
+        let now = Instant::now();
+        let (automatic, delay, forced, screen) = {
+            let away = lock(&shared.away);
+            (away.automatic, away.delay, away.forced, away.screen.clone())
+        };
+        if new_stream {
+            watch = Watch::default();
+            last_sample = None;
+            if let Some(detector) = &detector {
+                detector.reset();
+            }
+            // A stream that starts while the user is away by hand never shows them first.
+            fade.jump(forced);
+        }
+        if automatic {
+            if detector.is_none() {
+                detector = Detector::start();
+            }
+            if let Some(detector) = &detector {
+                if let Some((at, reading)) = detector.take_reading() {
+                    watch.observe(at, &reading);
+                }
+                if last_sample.is_none_or(|last| now.duration_since(last) >= presence::INTERVAL)
+                    && let Some(mut sample) = detector.begin()
+                {
+                    sample.fill(picture.planes());
+                    detector.submit(now, sample);
+                    last_sample = Some(now);
+                }
+            }
+        } else if detector.take().is_some() {
+            watch = Watch::default();
+            last_sample = None;
+        }
+        let away_now = forced || (automatic && watch.step(now, delay));
+        let mix = fade.step(now, away_now);
+        screen.set_playing(away_now || mix > 0);
+        shared.report_away(|status| {
+            status.showing = away_now;
+            status.in_picture = if automatic { watch.in_picture() } else { None };
+        });
 
         let settings = *lock(&shared.settings);
         let subject = *lock(&shared.subject);
@@ -373,30 +566,45 @@ fn run(shared: &Shared) {
         let started = Instant::now();
         let mut bgra = None;
 
-        if wants_camera {
-            let (plan, view) = plan(crop, &settings, source, (OUTPUT_WIDTH, OUTPUT_HEIGHT));
-            *lock(&shared.view) = Some(view);
+        // The away screen is a camera-sized picture, so the preview is made from the camera
+        // frame while any of it shows.
+        if wants_camera || (mix > 0 && preview_due) {
             camera.resize(OUTPUT_WIDTH, OUTPUT_HEIGHT);
-            match camera_scaler.transform_nv12(picture.planes(), &plan, camera.planes_mut()) {
-                Ok(()) => {
-                    colour.apply(&settings.colour, camera.planes_mut(), plan.content);
+            let mut finished = false;
+            if mix < 256 {
+                let (plan, view) = plan(crop, &settings, source, (OUTPUT_WIDTH, OUTPUT_HEIGHT));
+                *lock(&shared.view) = Some(view);
+                match camera_scaler.transform_nv12(picture.planes(), &plan, camera.planes_mut()) {
+                    Ok(()) => {
+                        colour.apply(&settings.colour, camera.planes_mut(), plan.content);
+                        finished = true;
+                    }
+                    Err(error) => log::warn!("cannot transform a picture: {error}"),
+                }
+            }
+            if mix > 0 {
+                screen.with_picture(|away| {
+                    if finished {
+                        blend(&mut camera.data, away, mix);
+                    } else {
+                        camera.data.copy_from_slice(away);
+                    }
+                });
+                finished = true;
+            }
+            if finished {
+                if wants_camera {
                     deliver(shared, generation, &picture, &camera);
-                    if preview_due {
-                        let (width, height) =
-                            preview_size(shared.preview_max_width.load(Ordering::Relaxed));
-                        let mut pixels = Vec::new();
-                        match bgra_scaler.planes_to_bgra(
-                            camera.planes(),
-                            width,
-                            height,
-                            &mut pixels,
-                        ) {
-                            Ok(()) => bgra = Some((width, height, pixels)),
-                            Err(error) => log::warn!("cannot scale a preview picture: {error}"),
-                        }
+                }
+                if preview_due {
+                    let (width, height) =
+                        preview_size(shared.preview_max_width.load(Ordering::Relaxed));
+                    let mut pixels = Vec::new();
+                    match bgra_scaler.planes_to_bgra(camera.planes(), width, height, &mut pixels) {
+                        Ok(()) => bgra = Some((width, height, pixels)),
+                        Err(error) => log::warn!("cannot scale a preview picture: {error}"),
                     }
                 }
-                Err(error) => log::warn!("cannot transform a picture: {error}"),
             }
         } else if preview_due {
             let (width, height) = preview_size(shared.preview_max_width.load(Ordering::Relaxed));
@@ -418,7 +626,8 @@ fn run(shared: &Shared) {
             }
         }
 
-        if wants_camera || bgra.is_some() {
+        // The transform time is about the live picture; the away screen would skew it.
+        if (wants_camera || bgra.is_some()) && mix == 0 {
             shared
                 .timing
                 .total_us

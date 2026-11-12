@@ -7,8 +7,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const RUNTIME_DLLS: [&str; 4] = [
+const RUNTIME_DLLS: [&str; 5] = [
     "avcodec-62.dll",
+    "avformat-62.dll",
     "avutil-60.dll",
     "swresample-6.dll",
     "swscale-9.dll",
@@ -21,7 +22,9 @@ fn main() {
         .unwrap_or_else(|| manifest_dir.join("../../third_party/ffmpeg"));
 
     println!("cargo:rerun-if-env-changed=PAIRCAM_FFMPEG_DIR");
-    println!("cargo:rerun-if-changed=native/decoder.c");
+    for source in ["decoder.c", "media.c", "frame.h"] {
+        println!("cargo:rerun-if-changed=native/{source}");
+    }
     println!(
         "cargo:rerun-if-changed={}",
         ffmpeg.join(".version").display()
@@ -36,6 +39,7 @@ fn main() {
 
     cc::Build::new()
         .file("native/decoder.c")
+        .file("native/media.c")
         .include(ffmpeg.join("include"))
         .warnings(true)
         .compile("paircam_decoder");
@@ -44,7 +48,7 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         ffmpeg.join("lib").display()
     );
-    for library in ["avcodec", "avutil", "swscale"] {
+    for library in ["avcodec", "avformat", "avutil", "swscale"] {
         println!("cargo:rustc-link-lib=dylib={library}");
     }
 

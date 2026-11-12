@@ -18,15 +18,7 @@
 #include <libavutil/pixfmt.h>
 #include <libswscale/swscale.h>
 
-typedef struct PcFrame {
-    int32_t width;
-    int32_t height;
-    int64_t pts;
-    const uint8_t *y;
-    int32_t y_stride;
-    const uint8_t *uv;
-    int32_t uv_stride;
-} PcFrame;
+#include "frame.h"
 
 typedef struct PcDecoder {
     AVCodecContext *context;

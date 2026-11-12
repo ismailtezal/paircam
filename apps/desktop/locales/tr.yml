@@ -9,6 +9,7 @@ status:
   pairing: Eşleştiriliyor
   connected: Bağlandı
   live: Canlı
+  away: Uzakta
   failed: Bağlantı kesildi
 
 connect:
@@ -127,6 +128,24 @@ tracking:
   gesture_palm: "Açık avuç: yüz takibini aç veya kapat"
   gesture_frame: "Başparmak ve işaret parmağıyla L: 2× yakınlaştır ve geri dön"
   gesture_spread: "İki eli açıp kapat: yakınlaştır veya uzaklaştır"
+
+away:
+  title: MOLA EKRANI
+  automatic: Kadrajdan çıkınca göster
+  automatic_hint: Diğer uygulamalar boş oda yerine bunu görür. Geri geldiğinde görüntün döner.
+  delay: Göstermeden önce bekle
+  delay_value: "%{seconds} sn"
+  in_picture: Kadrajdasın
+  nobody: Kadrajda kimse yok
+  media: Video veya resim
+  plain_card: Düz kart
+  choose: Seç…
+  remove: Kaldır
+  media_failed: Bu dosya oynatılamıyor. Onun yerine düz kart gösteriliyor.
+  message: Mesaj
+  default_message: Hemen döneceğiz
+  show_now: Şimdi göster
+  back: Kameraya dön
 
 gesture:
   palm: Açık avuç

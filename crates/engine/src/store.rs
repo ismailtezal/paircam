@@ -1,6 +1,6 @@
 //! What the desktop remembers between runs: its own identity, paired cameras, stream
-//! preferences and picture adjustments. Stored as JSON in the app data folder; pairing keys are encrypted for the
-//! current Windows user before they touch the disk.
+//! preferences, picture adjustments and the away screen. Stored as JSON in the app data
+//! folder; pairing keys are encrypted for the current Windows user before they touch the disk.
 
 use std::fs;
 use std::net::SocketAddr;
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use paircam_protocol::{Codec, DeviceId, PairingKey};
 use serde::{Deserialize, Serialize};
 
+use crate::away::AwaySettings;
 use crate::picture::PictureSettings;
 
 /// A camera this computer has paired with.
@@ -55,6 +56,8 @@ struct StoredFile {
     preferences: StreamPreferences,
     /// Picture adjustments belong to this computer, whichever phone is connected.
     picture: PictureSettings,
+    /// The away screen, also this computer's.
+    away: AwaySettings,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -120,6 +123,17 @@ impl Store {
     pub fn set_picture(&mut self, picture: PictureSettings) {
         if self.file.picture != picture {
             self.file.picture = picture;
+            self.save();
+        }
+    }
+
+    pub fn away(&self) -> &AwaySettings {
+        &self.file.away
+    }
+
+    pub fn set_away(&mut self, away: AwaySettings) {
+        if self.file.away != away {
+            self.file.away = away;
             self.save();
         }
     }

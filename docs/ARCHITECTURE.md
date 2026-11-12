@@ -73,6 +73,18 @@ The whole desktop app is Rust in one process: interface, engine and the feed to 
   its intensity and the adjustments into lookup tables (a tone curve, a 256x256 chroma map,
   and chroma gain and offset by luma), and the C layer applies them to NV12 directly, a few
   lookups per 2x2 block with no RGB round trip, in about 2 to 3 ms per 1080p frame.
+- **Away screen:** optional and off by default. While nobody is in the picture, other apps
+  see a looping video or still picture of the user's choice (or a plain card) with a short
+  message, cross-faded in and out. A few times a second the picture thread hands a 640-pixel
+  grey copy of the incoming picture to a presence thread, which looks for a face with the
+  detector built into Windows and for change in a grid of cells. The person counts as there
+  while a face is in view, while something moves where they sit, or while that place still
+  looks as it did when their face was last seen, so looking down at a notebook is not
+  leaving. Leaving takes the delay the user set; a face brings the live picture back at
+  once. Without readings nobody is ever hidden. The file is read with FFmpeg on a thread of
+  its own, only while the screen shows, from its first picture each time; Windows draws the
+  message. The user can also show the screen by hand (`crates/engine/src/away.rs`,
+  `presence.rs`, `screen.rs`).
 - **Preview:** the same plan, scaled to the preview size as BGRA (up to 60 a second), so the
   preview shows exactly what other apps get. While an app uses the camera, the preview is
   scaled down from the camera frame itself; otherwise the transform renders straight at the

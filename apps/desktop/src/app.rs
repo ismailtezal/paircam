@@ -28,8 +28,8 @@ use paircam_engine::protocol::{
 };
 use paircam_engine::vcam::VirtualCamera;
 use paircam_engine::{
-    Channels, DiscoveredCamera, Engine, Event, Failure, LinkStats, PairedCamera, Phase,
-    PictureSettings, PreviewFrame, VideoInfo,
+    AwaySettings, AwayStatus, Channels, DiscoveredCamera, Engine, Event, Failure, LinkStats,
+    PairedCamera, Phase, PictureSettings, PreviewFrame, VideoInfo,
 };
 use paircam_ui::tokens::{font, radius};
 use paircam_ui::{
@@ -37,6 +37,7 @@ use paircam_ui::{
 };
 use smallvec::SmallVec;
 
+use crate::away::AwayControls;
 use crate::camera::{self, CameraStatus};
 use crate::colour::ColourControls;
 use crate::controls::StreamControls;
@@ -111,6 +112,10 @@ pub struct PairCamApp {
     picture: PictureSettings,
     picture_controls: PictureControls,
     colour_controls: ColourControls,
+    /// The away screen as the user set it up, and what it is doing, as the engine reports it.
+    away: AwaySettings,
+    away_status: AwayStatus,
+    away_controls: AwayControls,
     gesture_notice: Option<GestureNotice>,
     next_notice_id: u64,
     /// Where the stage was last laid out, for turning drags into pans.
@@ -224,11 +229,16 @@ impl PairCamApp {
             cx.defer_in(window, |this, window, cx| this.open_settings(window, cx));
         }
         let picture = engine.picture();
+        engine.set_away_fallback_message(&text!("away.default_message"));
+        let away = engine.away();
 
         Self {
             picture,
             picture_controls: PictureControls::new(&picture, cx),
             colour_controls: ColourControls::new(&picture.colour, cx),
+            away_controls: AwayControls::new(&away, window, cx),
+            away_status: engine.away_status(),
+            away,
             gesture_notice: None,
             next_notice_id: 0,
             stage_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -388,6 +398,7 @@ impl PairCamApp {
                 self.save_phone_log(&entry);
             }
             Event::Gesture(gesture) => self.show_gesture(gesture, cx),
+            Event::Away(status) => self.away_status = status,
         }
         cx.notify();
     }
@@ -452,6 +463,35 @@ impl PairCamApp {
 
     pub(crate) fn colour_controls_mut(&mut self) -> &mut ColourControls {
         &mut self.colour_controls
+    }
+
+    /// Changes the away screen in the engine, which applies and saves it. Nothing happens when
+    /// nothing changed, because a new file or message makes the engine rebuild the screen.
+    pub(crate) fn change_away(
+        &mut self,
+        change: impl FnOnce(&mut AwaySettings),
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.engine.away();
+        let mut away = current.clone();
+        change(&mut away);
+        let away = away.normalized();
+        if away == current {
+            return;
+        }
+        self.engine.set_away(away);
+        self.away = self.engine.away();
+        cx.notify();
+    }
+
+    /// Shows the away screen by hand, or goes back to the camera.
+    pub(crate) fn set_away_now(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.engine.set_away_now(on);
+        cx.notify();
+    }
+
+    pub(crate) fn away_controls(&self) -> &AwayControls {
+        &self.away_controls
     }
 
     /// Whether face tracking frames the picture right now, which leaves zoom and pan to it.
@@ -673,6 +713,9 @@ impl PairCamApp {
         self.address.update(cx, |address, cx| {
             address.set_placeholder(text!("connect.address_placeholder"), window, cx);
         });
+        self.engine
+            .set_away_fallback_message(&text!("away.default_message"));
+        self.away_controls.language_changed(window, cx);
         if let Some(capabilities) = self
             .stream_controls
             .as_ref()
@@ -698,6 +741,10 @@ impl PairCamApp {
             Phase::Idle => (LinkState::Idle, text!("status.idle")),
             Phase::Connecting { .. } => (LinkState::Connecting, text!("status.connecting")),
             Phase::Pairing { .. } => (LinkState::Connecting, text!("status.pairing")),
+            // Other apps see the away screen, not the person.
+            Phase::Connected { .. } if self.away_status.showing => {
+                (LinkState::Connecting, text!("status.away"))
+            }
             Phase::Connected { .. } if self.preview.is_some() => {
                 (LinkState::Live, text!("status.live"))
             }
@@ -1271,7 +1318,13 @@ impl PairCamApp {
                     &self.picture,
                     cx,
                 )
-            }));
+            }))
+            .child(self.away_controls.render(
+                &self.away,
+                self.away_status,
+                self.engine.away_now(),
+                cx,
+            ));
 
         // The sections scroll; the way out stays in reach at the bottom.
         div()

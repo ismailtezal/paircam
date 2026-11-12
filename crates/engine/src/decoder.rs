@@ -9,15 +9,30 @@ use paircam_protocol::Codec;
 use crate::colour::ColourTables;
 use crate::picture::{PixelRect, Plan};
 
+/// Mirrors `PcFrame` in `native/frame.h`.
 #[repr(C)]
-struct RawFrame {
-    width: i32,
-    height: i32,
-    pts: i64,
-    y: *const u8,
-    y_stride: i32,
-    uv: *const u8,
-    uv_stride: i32,
+pub(crate) struct RawFrame {
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) pts: i64,
+    pub(crate) y: *const u8,
+    pub(crate) y_stride: i32,
+    pub(crate) uv: *const u8,
+    pub(crate) uv_stride: i32,
+}
+
+impl RawFrame {
+    pub(crate) fn empty() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            pts: 0,
+            y: std::ptr::null(),
+            y_stride: 0,
+            uv: std::ptr::null(),
+            uv_stride: 0,
+        }
+    }
 }
 
 /// Mirrors `PcTransform` in `native/decoder.c`.
@@ -166,7 +181,13 @@ pub fn apply_colour(
 #[error("{0}")]
 pub struct DecodeError(String);
 
-fn error_from_code(code: c_int) -> DecodeError {
+impl DecodeError {
+    pub(crate) fn new(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+}
+
+pub(crate) fn error_from_code(code: c_int) -> DecodeError {
     let mut buffer = [0 as c_char; 128];
     // SAFETY: the buffer is valid for its length and the C side always terminates it.
     let text = unsafe {
@@ -289,15 +310,7 @@ impl Decoder {
         access_unit: &[u8],
         timestamp_us: u64,
     ) -> Result<Option<Nv12Frame<'_>>, DecodeError> {
-        let mut raw = RawFrame {
-            width: 0,
-            height: 0,
-            pts: 0,
-            y: std::ptr::null(),
-            y_stride: 0,
-            uv: std::ptr::null(),
-            uv_stride: 0,
-        };
+        let mut raw = RawFrame::empty();
         // SAFETY: `raw` is a live decoder and the slice is valid for its length.
         let result = unsafe {
             pc_decoder_decode(

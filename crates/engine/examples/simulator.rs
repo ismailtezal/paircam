@@ -15,6 +15,10 @@
 //! the simulator reports where it is in `subject` messages, as the phone does. While gestures
 //! are on, it performs one every few seconds (`--gesture-seconds`), acts on it as the phone
 //! would and tells the desktop.
+//!
+//! `--room` is for the away screen: the background is a still picture instead of the moving
+//! pattern, and the person gets a body, so the only thing that moves is the person, and the
+//! picture is empty and still while they are out.
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read};
@@ -50,6 +54,8 @@ struct Options {
     tracking: bool,
     /// Start with hand gestures on.
     gestures: bool,
+    /// A still background and a person with a body, for the away screen.
+    room: bool,
 }
 
 fn options() -> Options {
@@ -64,6 +70,7 @@ fn options() -> Options {
         gesture_seconds: 6.0,
         tracking: false,
         gestures: false,
+        room: false,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -77,6 +84,7 @@ fn options() -> Options {
             "--ffmpeg" => options.ffmpeg = PathBuf::from(value()),
             "--tracking" => options.tracking = true,
             "--gestures" => options.gestures = true,
+            "--room" => options.room = true,
             "--gesture-seconds" => {
                 options.gesture_seconds = value().parse().expect("a number of seconds");
             }
@@ -310,9 +318,28 @@ fn present(t: f32) -> bool {
     (0.21 * t - 1.5).sin() < 0.85
 }
 
-/// A lavfi graph that draws the person over the test pattern.
-fn face_filter(width: u32, height: u32, fps: u32) -> String {
+/// A lavfi graph that draws the person over the test pattern, or, in a `room`, the person
+/// with a body over a still picture.
+fn face_filter(width: u32, height: u32, fps: u32, room: bool) -> String {
     let (face_width, face_height) = face_size(width, height);
+    if room {
+        // The body is three faces wide and hangs from the face to below the picture's edge.
+        let body_width = (face_width * 3).min(width) & !1;
+        return format!(
+            "smptebars=size={width}x{height}:rate={fps}[room];\
+             color=c=0x3A6EA5:size={body_width}x{height}:rate={fps}[body];\
+             color=c=0xF5A623:size={face_width}x{face_height}:rate={fps}[face];\
+             [room][body]overlay=\
+             x='(0.5+0.28*sin(0.45*t))*main_w-overlay_w/2':\
+             y='(0.42+0.12*sin(0.31*t+1))*main_h+{half_face}':\
+             enable='lt(sin(0.21*t-1.5),0.85)':shortest=1[with_body];\
+             [with_body][face]overlay=\
+             x='(0.5+0.28*sin(0.45*t))*main_w-overlay_w/2':\
+             y='(0.42+0.12*sin(0.31*t+1))*main_h-overlay_h/2':\
+             enable='lt(sin(0.21*t-1.5),0.85)':shortest=1[out0]",
+            half_face = face_height / 2
+        );
+    }
     format!(
         "testsrc2=size={width}x{height}:rate={fps}[pattern];\
          color=c=0xF5A623:size={face_width}x{face_height}:rate={fps}[face];\
@@ -559,6 +586,7 @@ fn start(
             configure.width,
             configure.height,
             configure.fps,
+            options.room,
         ))
         .args(["-pix_fmt", "yuv420p", "-c:v", &encoder])
         .args(["-b:v", &configure.bitrate.to_string()])

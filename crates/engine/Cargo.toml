@@ -34,13 +34,22 @@ windows = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
     "Win32_System_Registry",
+    # The away screen: finding a face in the picture, and drawing its message.
+    "Foundation",
+    "Foundation_Collections",
+    "Graphics_Imaging",
+    "Media_FaceAnalysis",
+    "Security_Cryptography",
+    "Storage_Streams",
+    "Win32_Graphics_Gdi",
 ] }
 
 [build-dependencies]
 cc = "1"
 
 [dev-dependencies]
-# The `looks` example reads still pictures and writes contact sheets.
+# The `looks` example reads still pictures and writes contact sheets, as do the away screen
+# checks.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 simple_logger = { version = "5", default-features = false, features = ["stderr"] }
 

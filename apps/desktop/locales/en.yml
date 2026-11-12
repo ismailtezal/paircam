@@ -9,6 +9,7 @@ status:
   pairing: Pairing
   connected: Connected
   live: Live
+  away: Away
   failed: Disconnected
 
 connect:
@@ -127,6 +128,24 @@ tracking:
   gesture_palm: "Open palm: face tracking on or off"
   gesture_frame: "L shape with thumb and finger: zoom to 2× and back"
   gesture_spread: "Two hands apart or together: zoom in or out"
+
+away:
+  title: AWAY SCREEN
+  automatic: Show when I leave
+  automatic_hint: Other apps see this instead of an empty room. You come back on screen when you return.
+  delay: Wait before showing
+  delay_value: "%{seconds} s"
+  in_picture: You are in the picture
+  nobody: Nobody in the picture
+  media: Video or picture
+  plain_card: Plain card
+  choose: Choose…
+  remove: Remove
+  media_failed: This file cannot be played. The plain card is shown instead.
+  message: Message
+  default_message: We’ll be right back
+  show_now: Show now
+  back: Back to camera
 
 gesture:
   palm: Open palm
