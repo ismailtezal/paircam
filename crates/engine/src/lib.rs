@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use async_channel::{Receiver, Sender};
 pub use paircam_protocol as protocol;
 use paircam_protocol::{
-    Capabilities, Codec, ControlValues, DeviceId, Gesture, LogEntry, Message, Stats,
+    Capabilities, CinematicState, Codec, ControlValues, DeviceId, Gesture, LogEntry, Message, Stats,
 };
 
 pub mod away;
@@ -122,6 +122,8 @@ pub enum Event {
     /// The away screen started or stopped showing, the person came or went, or the chosen
     /// file turned out playable or not.
     Away(AwayStatus),
+    /// What Cinematic mode sees and where it focuses, while it is on.
+    Cinematic(CinematicState),
 }
 
 /// A picture for the preview: tightly packed BGRA, already scaled down. It has the camera
@@ -280,6 +282,32 @@ impl Engine {
     pub fn end_pan(&self) {
         self.inner.pipeline.end_pan();
         lock(&self.inner.store).set_picture(self.picture());
+    }
+
+    /// Where a rectangle of the encoded picture, such as a subject the phone reports, shows in
+    /// the preview and the camera frame, as fractions of them. `None` before the first picture.
+    pub fn picture_rect_in_view(&self, rect: protocol::Rect) -> Option<picture::Rect> {
+        let view = self.inner.pipeline.view()?;
+        let oriented = self.picture().orientation().to_oriented(picture::Rect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        });
+        Some(view.to_output(oriented))
+    }
+
+    /// The point of the encoded picture under a point of the preview (as fractions of the
+    /// preview), for focusing where the user clicked. `None` over the bars around the picture
+    /// or before the first picture.
+    pub fn view_point_in_picture(&self, point: picture::Point) -> Option<protocol::Point> {
+        let view = self.inner.pipeline.view()?;
+        let oriented = view.to_oriented(point)?;
+        let source = self.picture().orientation().point_to_source(oriented);
+        Some(protocol::Point {
+            x: source.x.clamp(0.0, 1.0),
+            y: source.y.clamp(0.0, 1.0),
+        })
     }
 
     /// Hears about every change to the picture settings, whoever made it.

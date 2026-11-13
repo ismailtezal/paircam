@@ -19,6 +19,12 @@
 //! `--room` is for the away screen: the background is a still picture instead of the moving
 //! pattern, and the person gets a body, so the only thing that moves is the person, and the
 //! picture is empty and still while they are out.
+//!
+//! It also plays Cinematic mode: with it on, the background behind the person is blurred, the
+//! stream drops to 30 frames a second as the phone's does, and the simulator reports what it
+//! could focus on (the face, plus whatever the desktop asked it to track or hold) in
+//! `cinematic` messages. An open palm pulls the focus to a hand beside the face and back.
+//! `--low-light` says the room is too dark; `--no-cinematic` plays a phone without it.
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read};
@@ -33,11 +39,12 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use paircam_engine::discovery::Advertisement;
 use paircam_engine::protocol::{
-    CameraHandshake, CameraInfo, Capabilities, Codec, Configure, ControlCapabilities,
-    ControlValues, DEFAULT_PORT, DeviceId, FocusMode, Format, Gesture, GestureKind, GesturePhase,
-    Hello, Lens, Message, Mode, Opener, PairResult, PairingKey, Position, Range, Rect,
-    SERVICE_TYPE, Sealer, Stabilization, Stats, Status, Subject, Thermal, UNPAIRED, VideoConfig,
-    VideoFrame, WhiteBalanceMode, random_bytes, read_record, write_record,
+    CameraHandshake, CameraInfo, Capabilities, CinematicCapabilities, CinematicFocus,
+    CinematicState, CinematicSubject, Codec, Configure, ControlCapabilities, ControlValues,
+    DEFAULT_PORT, DeviceId, FocusMode, Format, Gesture, GestureKind, GesturePhase, Hello, Lens,
+    Message, Mode, Opener, PairResult, PairingKey, Point, Position, Range, Rect, SERVICE_TYPE,
+    Sealer, Stabilization, Stats, Status, Subject, SubjectFocus, SubjectKind, Thermal, UNPAIRED,
+    VideoConfig, VideoFrame, WhiteBalanceMode, random_bytes, read_record, write_record,
 };
 
 struct Options {
@@ -56,6 +63,10 @@ struct Options {
     gestures: bool,
     /// A still background and a person with a body, for the away screen.
     room: bool,
+    /// Play a phone that cannot do Cinematic mode.
+    no_cinematic: bool,
+    /// Report that the room is too dark for Cinematic mode.
+    low_light: bool,
 }
 
 fn options() -> Options {
@@ -71,6 +82,8 @@ fn options() -> Options {
         tracking: false,
         gestures: false,
         room: false,
+        no_cinematic: false,
+        low_light: false,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -85,6 +98,8 @@ fn options() -> Options {
             "--tracking" => options.tracking = true,
             "--gestures" => options.gestures = true,
             "--room" => options.room = true,
+            "--no-cinematic" => options.no_cinematic = true,
+            "--low-light" => options.low_light = true,
             "--gesture-seconds" => {
                 options.gesture_seconds = value().parse().expect("a number of seconds");
             }
@@ -203,7 +218,10 @@ fn serve(
         println!("simulator: \"{}\" resumed", host_hello.name);
     }
 
-    send(&writer, &Message::Capabilities(capabilities()));
+    send(
+        &writer,
+        &Message::Capabilities(capabilities(!options.no_cinematic)),
+    );
     let controls = Arc::new(Mutex::new(ControlValues {
         zoom: Some(1.0),
         focus: Some(FocusMode::Auto),
@@ -213,8 +231,11 @@ fn serve(
         stabilization: Some(Stabilization::Standard),
         face_tracking: Some(options.tracking),
         gestures: Some(options.gestures),
+        cinematic: (!options.no_cinematic).then_some(false),
+        aperture: (!options.no_cinematic).then_some(DEFAULT_APERTURE),
         ..Default::default()
     }));
+    let focus: SharedFocus = Arc::new(Mutex::new(SimFocus::Auto));
     send(
         &writer,
         &Message::ControlState(controls.lock().unwrap().clone()),
@@ -223,8 +244,10 @@ fn serve(
     let _person = Person::start(
         writer.clone(),
         controls.clone(),
+        focus.clone(),
         scene.clone(),
         options.gesture_seconds,
+        options.low_light,
     );
 
     let mut configuration: Option<Configure> = None;
@@ -240,21 +263,41 @@ fn serve(
                 let restart = stream_task.take().is_some();
                 configuration = Some(configure);
                 if restart {
-                    stream_task = start(options, configuration.as_ref(), &writer, &scene);
+                    let cinematic = controls.lock().unwrap().cinematic == Some(true);
+                    stream_task =
+                        start(options, configuration.as_ref(), cinematic, &writer, &scene);
                 }
             }
             Message::StartStream => {
                 drop(stream_task.take());
-                stream_task = start(options, configuration.as_ref(), &writer, &scene);
+                let cinematic = controls.lock().unwrap().cinematic == Some(true);
+                stream_task = start(options, configuration.as_ref(), cinematic, &writer, &scene);
             }
             Message::StopStream => stream_task = None,
             Message::Control(change) => {
                 println!("simulator: control {change:?}");
-                let state = {
+                if let Some(target) = change.cinematic_focus {
+                    *focus.lock().unwrap() = SimFocus::from(target);
+                }
+                let (state, cinematic_changed) = {
                     let mut controls = controls.lock().unwrap();
-                    merge(&mut controls, change);
-                    controls.clone()
+                    let before = controls.cinematic;
+                    merge(&mut controls, change, options.no_cinematic);
+                    (controls.clone(), controls.cinematic != before)
                 };
+                if cinematic_changed {
+                    *focus.lock().unwrap() = SimFocus::Auto;
+                    // The phone switches cameras: a new stream, with or without the blur.
+                    if stream_task.take().is_some() {
+                        stream_task = start(
+                            options,
+                            configuration.as_ref(),
+                            state.cinematic == Some(true),
+                            &writer,
+                            &scene,
+                        );
+                    }
+                }
                 send(&writer, &Message::ControlState(state));
             }
             Message::Ping(timestamp) => {
@@ -271,7 +314,7 @@ fn serve(
     Ok(())
 }
 
-fn merge(state: &mut ControlValues, change: ControlValues) {
+fn merge(state: &mut ControlValues, change: ControlValues, no_cinematic: bool) {
     state.zoom = change.zoom.or(state.zoom);
     state.focus = change.focus.or(state.focus);
     state.focus_position = change.focus_position.or(state.focus_position);
@@ -281,6 +324,140 @@ fn merge(state: &mut ControlValues, change: ControlValues) {
     state.stabilization = change.stabilization.or(state.stabilization);
     state.face_tracking = change.face_tracking.or(state.face_tracking);
     state.gestures = change.gestures.or(state.gestures);
+    if !no_cinematic {
+        state.cinematic = change.cinematic.or(state.cinematic);
+        state.aperture = change
+            .aperture
+            .map(|aperture| aperture.clamp(MIN_APERTURE, MAX_APERTURE))
+            .or(state.aperture);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Cinematic mode
+// ---------------------------------------------------------------------------------------------
+
+const MIN_APERTURE: f32 = 2.0;
+const MAX_APERTURE: f32 = 16.0;
+const DEFAULT_APERTURE: f32 = 4.5;
+/// How many times a second `cinematic` is sent while it is on.
+const CINEMATIC_REPORT_INTERVAL: Duration = Duration::from_millis(100);
+/// The ids the simulator gives what it can focus on.
+const FACE_ID: i64 = 1;
+const HAND_ID: i64 = 2;
+const OBJECT_ID: i64 = 3;
+const FIXED_ID: i64 = 4;
+
+/// Where the simulated Cinematic mode focuses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SimFocus {
+    /// On the face while it is in view.
+    Auto,
+    /// On the face, firmly.
+    Face { strong: bool },
+    /// On the hand an open palm raised beside the face.
+    Hand,
+    /// On something at a point the desktop asked to track.
+    Object { point: Point, strong: bool },
+    /// At the distance of a point.
+    Fixed { point: Point },
+}
+
+type SharedFocus = Arc<Mutex<SimFocus>>;
+
+impl From<CinematicFocus> for SimFocus {
+    fn from(target: CinematicFocus) -> Self {
+        match target {
+            CinematicFocus::Subject { id, strong } if id == FACE_ID => Self::Face { strong },
+            CinematicFocus::Subject { id, .. } if id == HAND_ID => Self::Hand,
+            CinematicFocus::Track { point, strong } => Self::Object { point, strong },
+            CinematicFocus::Fixed { point } => Self::Fixed { point },
+            _ => Self::Auto,
+        }
+    }
+}
+
+/// A square of `size` (as a share of the picture's height) around a point.
+fn square_around(point: Point, size: f32, width: u32, height: u32) -> Rect {
+    let rect_width = size * height as f32 / width as f32;
+    Rect {
+        x: (point.x - rect_width / 2.0).clamp(0.0, 1.0 - rect_width),
+        y: (point.y - size / 2.0).clamp(0.0, 1.0 - size),
+        width: rect_width,
+        height: size,
+    }
+}
+
+/// What the simulated Cinematic mode reports at `t` seconds into the stream. A track that
+/// lands on the face focuses the face; a strong focus on the face ends when the face leaves.
+fn cinematic_state(
+    focus: &mut SimFocus,
+    t: f32,
+    width: u32,
+    height: u32,
+    low_light: bool,
+) -> CinematicState {
+    let face = face_at(t, width, height);
+    if let (SimFocus::Object { point, strong }, Some(face)) = (*focus, face)
+        && (face.x..face.x + face.width).contains(&point.x)
+        && (face.y..face.y + face.height).contains(&point.y)
+    {
+        *focus = SimFocus::Face { strong };
+    }
+    if face.is_none() && matches!(focus, SimFocus::Face { .. } | SimFocus::Hand) {
+        *focus = SimFocus::Auto;
+    }
+
+    let mut subjects = Vec::new();
+    if let Some(face) = face {
+        let face_focus = match focus {
+            SimFocus::Auto | SimFocus::Face { strong: false } => SubjectFocus::Weak,
+            SimFocus::Face { strong: true } => SubjectFocus::Strong,
+            _ => SubjectFocus::None,
+        };
+        subjects.push(CinematicSubject {
+            id: FACE_ID,
+            kind: SubjectKind::Face,
+            rect: face,
+            focus: face_focus,
+        });
+        if *focus == SimFocus::Hand {
+            // Beside the face and a little lower, as a raised hand is.
+            let hand = Point {
+                x: (face.x + face.width * 1.9).min(0.95),
+                y: (face.y + face.height * 0.9).min(0.95),
+            };
+            subjects.push(CinematicSubject {
+                id: HAND_ID,
+                kind: SubjectKind::Hand,
+                rect: square_around(hand, face.height * 0.9, width, height),
+                focus: SubjectFocus::Strong,
+            });
+        }
+    }
+    match *focus {
+        SimFocus::Object { point, strong } => subjects.push(CinematicSubject {
+            id: OBJECT_ID,
+            kind: SubjectKind::Object,
+            rect: square_around(point, 0.14, width, height),
+            focus: if strong {
+                SubjectFocus::Strong
+            } else {
+                SubjectFocus::Weak
+            },
+        }),
+        SimFocus::Fixed { point } => subjects.push(CinematicSubject {
+            id: FIXED_ID,
+            kind: SubjectKind::Fixed,
+            rect: square_around(point, 0.1, width, height),
+            focus: SubjectFocus::Strong,
+        }),
+        _ => {}
+    }
+    CinematicState {
+        subjects,
+        low_light,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -320,13 +497,19 @@ fn present(t: f32) -> bool {
 
 /// A lavfi graph that draws the person over the test pattern, or, in a `room`, the person
 /// with a body over a still picture.
-fn face_filter(width: u32, height: u32, fps: u32, room: bool) -> String {
+fn face_filter(width: u32, height: u32, fps: u32, room: bool, cinematic: bool) -> String {
     let (face_width, face_height) = face_size(width, height);
+    // Cinematic mode: the background melts into a blur while the person stays sharp.
+    let blur = if cinematic {
+        format!(",gblur=sigma={:.1}", height as f32 / 70.0)
+    } else {
+        String::new()
+    };
     if room {
         // The body is three faces wide and hangs from the face to below the picture's edge.
         let body_width = (face_width * 3).min(width) & !1;
         return format!(
-            "smptebars=size={width}x{height}:rate={fps}[room];\
+            "smptebars=size={width}x{height}:rate={fps}{blur}[room];\
              color=c=0x3A6EA5:size={body_width}x{height}:rate={fps}[body];\
              color=c=0xF5A623:size={face_width}x{face_height}:rate={fps}[face];\
              [room][body]overlay=\
@@ -341,7 +524,7 @@ fn face_filter(width: u32, height: u32, fps: u32, room: bool) -> String {
         );
     }
     format!(
-        "testsrc2=size={width}x{height}:rate={fps}[pattern];\
+        "testsrc2=size={width}x{height}:rate={fps}{blur}[pattern];\
          color=c=0xF5A623:size={face_width}x{face_height}:rate={fps}[face];\
          [pattern][face]overlay=\
          x='(0.5+0.28*sin(0.45*t))*main_w-overlay_w/2':\
@@ -378,8 +561,10 @@ impl Person {
     fn start(
         writer: Writer,
         controls: Arc<Mutex<ControlValues>>,
+        focus: SharedFocus,
         scene: Scene,
         gesture_seconds: f32,
+        low_light: bool,
     ) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         {
@@ -390,6 +575,7 @@ impl Person {
                     .into_iter()
                     .cycle();
                 let mut spreading_until: Option<Instant> = None;
+                let mut last_cinematic: Option<(Instant, CinematicState)> = None;
                 while running.load(Ordering::SeqCst) {
                     // Up to 15 reports a second, as the phone sends.
                     thread::sleep(Duration::from_millis(66));
@@ -404,6 +590,30 @@ impl Person {
                         if !send(&writer, &Message::Subject(Subject { face })) {
                             break;
                         }
+                    }
+
+                    if state.cinematic == Some(true)
+                        && let Some((started, width, height)) = streaming
+                    {
+                        let t = started.elapsed().as_secs_f32();
+                        let report = {
+                            let mut focus = focus.lock().unwrap();
+                            cinematic_state(&mut focus, t, width, height, low_light)
+                        };
+                        // Only changes are worth sending; positions change every report while
+                        // the face moves, so this is at most every `CINEMATIC_REPORT_INTERVAL`.
+                        let due = last_cinematic.as_ref().is_none_or(|(at, last)| {
+                            at.elapsed() >= CINEMATIC_REPORT_INTERVAL && *last != report
+                        });
+                        if due {
+                            if !send(&writer, &Message::Cinematic(report.clone())) {
+                                break;
+                            }
+                            last_cinematic = Some((Instant::now(), report));
+                        }
+                    } else if last_cinematic.take().is_some() {
+                        // Cinematic mode went off: nothing to focus on any more.
+                        let _ = send(&writer, &Message::Cinematic(CinematicState::default()));
                     }
 
                     if state.gestures != Some(true) {
@@ -428,6 +638,17 @@ impl Person {
                     next_gesture = Some(now + Duration::from_secs_f32(gesture_seconds.max(0.5)));
                     let kind = gestures.next().unwrap_or(GestureKind::Palm);
                     match kind {
+                        GestureKind::Palm if state.cinematic == Some(true) => {
+                            let mut focus = focus.lock().unwrap();
+                            *focus = if *focus == SimFocus::Hand {
+                                SimFocus::Auto
+                            } else {
+                                SimFocus::Hand
+                            };
+                            println!("simulator: open palm; focus {:?}", *focus);
+                            drop(focus);
+                            perform(&writer, kind, GesturePhase::Recognised, &controls);
+                        }
                         GestureKind::Palm => {
                             let on = state.face_tracking != Some(true);
                             controls.lock().unwrap().face_tracking = Some(on);
@@ -482,7 +703,7 @@ fn perform(
     let _ = send(writer, &Message::ControlState(state));
 }
 
-fn capabilities() -> Capabilities {
+fn capabilities(cinematic: bool) -> Capabilities {
     let formats = |sizes: &[(u32, u32, u32)]| {
         sizes
             .iter()
@@ -536,7 +757,13 @@ fn capabilities() -> Capabilities {
                 Stabilization::Cinematic,
             ],
             face_tracking: true,
-            cinematic: None,
+            cinematic: cinematic.then(|| CinematicCapabilities {
+                positions: vec![Position::Back, Position::Front],
+                aperture: Some(Range {
+                    min: MIN_APERTURE,
+                    max: MAX_APERTURE,
+                }),
+            }),
             gestures: vec![GestureKind::Palm, GestureKind::Frame, GestureKind::Spread],
         },
     }
@@ -561,10 +788,15 @@ impl Drop for StreamTask {
 fn start(
     options: &Options,
     configuration: Option<&Configure>,
+    cinematic: bool,
     writer: &Writer,
     scene: &Scene,
 ) -> Option<StreamTask> {
-    let configure = configuration?.clone();
+    let mut configure = configuration?.clone();
+    if cinematic {
+        // As on the phone: Cinematic mode films at 30 frames a second at most.
+        configure.fps = configure.fps.min(30);
+    }
     let hevc = configure.codec == Codec::Hevc;
     let encoder = options
         .encoder
@@ -588,6 +820,7 @@ fn start(
             configure.height,
             configure.fps,
             options.room,
+            cinematic,
         ))
         .args(["-pix_fmt", "yuv420p", "-c:v", &encoder])
         .args(["-b:v", &configure.bitrate.to_string()])

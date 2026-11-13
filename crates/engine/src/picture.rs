@@ -408,13 +408,56 @@ pub struct Plan {
     pub output_height: u32,
 }
 
-/// What the output shows, for turning pointer movement into a pan.
+/// What the output shows, for turning pointer movement into a pan and for placing things
+/// from the source picture over the preview.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
     /// The part of the oriented picture that is visible.
     pub crop: Rect,
     /// Where it lands in the output, as fractions of the output.
     pub content: Rect,
+}
+
+impl View {
+    /// Where a rectangle of the oriented picture lands in the output, as fractions of the
+    /// output. Parts outside the visible crop land outside the content.
+    pub fn to_output(&self, oriented: Rect) -> Rect {
+        let scale_x = self.content.width / self.crop.width.max(f32::EPSILON);
+        let scale_y = self.content.height / self.crop.height.max(f32::EPSILON);
+        Rect {
+            x: self.content.x + (oriented.x - self.crop.x) * scale_x,
+            y: self.content.y + (oriented.y - self.crop.y) * scale_y,
+            width: oriented.width * scale_x,
+            height: oriented.height * scale_y,
+        }
+    }
+
+    /// The point of the oriented picture under a point of the output, or `None` over the
+    /// bars around the picture.
+    pub fn to_oriented(&self, output: Point) -> Option<Point> {
+        let content = self.content;
+        let inside = (content.x..=content.x + content.width).contains(&output.x)
+            && (content.y..=content.y + content.height).contains(&output.y);
+        if !inside || content.width <= 0.0 || content.height <= 0.0 {
+            return None;
+        }
+        Some(Point {
+            x: self.crop.x + (output.x - content.x) / content.width * self.crop.width,
+            y: self.crop.y + (output.y - content.y) / content.height * self.crop.height,
+        })
+    }
+}
+
+impl Orientation {
+    /// A source point as it appears on screen.
+    pub fn point_to_oriented(&self, point: Point) -> Point {
+        self.to_oriented(Rect::around(point, 0.0, 0.0)).center()
+    }
+
+    /// An on-screen point in the source picture.
+    pub fn point_to_source(&self, point: Point) -> Point {
+        self.to_source(Rect::around(point, 0.0, 0.0)).center()
+    }
 }
 
 /// Fits a `source_width` x `source_height` picture into `width` x `height`, keeping its aspect
@@ -862,6 +905,65 @@ mod tests {
             }
         }
         all
+    }
+
+    #[test]
+    fn views_map_rectangles_out_and_points_back() {
+        // A zoomed view of the middle of a portrait picture, in a frame with bars at the sides.
+        let view = View {
+            crop: Rect {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            },
+            content: Rect {
+                x: 0.25,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            },
+        };
+        let face = Rect {
+            x: 0.5,
+            y: 0.25,
+            width: 0.1,
+            height: 0.1,
+        };
+        assert!(close_rect(
+            view.to_output(face),
+            Rect {
+                x: 0.5,
+                y: 0.0,
+                width: 0.1,
+                height: 0.2,
+            }
+        ));
+        let back = view.to_oriented(Point { x: 0.55, y: 0.1 }).unwrap();
+        assert!(close(back.x, 0.55) && close(back.y, 0.3));
+        // Over the bars there is nothing to point at.
+        assert_eq!(view.to_oriented(Point { x: 0.1, y: 0.5 }), None);
+    }
+
+    #[test]
+    fn points_survive_every_orientation_both_ways() {
+        let point = Point { x: 0.2, y: 0.7 };
+        for orientation in orientations() {
+            let there = orientation.point_to_oriented(point);
+            let back = orientation.point_to_source(there);
+            assert!(
+                close(back.x, point.x) && close(back.y, point.y),
+                "{orientation:?}"
+            );
+        }
+        let turned = Orientation {
+            rotation: Rotation::Clockwise90,
+            mirror: false,
+            flip: false,
+        };
+        // (u, v) goes to (1 - v, u).
+        let there = turned.point_to_oriented(point);
+        assert!(close(there.x, 0.3) && close(there.y, 0.2));
     }
 
     #[test]

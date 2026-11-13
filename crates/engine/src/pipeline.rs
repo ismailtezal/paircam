@@ -314,6 +314,11 @@ impl Pipeline {
             .store(width, Ordering::Relaxed);
     }
 
+    /// What the output showed last, or `None` before the first picture of a stream.
+    pub(crate) fn view(&self) -> Option<View> {
+        *lock(&self.shared.view)
+    }
+
     pub(crate) fn settings(&self) -> PictureSettings {
         *lock(&self.shared.settings)
     }

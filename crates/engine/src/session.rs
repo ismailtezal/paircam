@@ -332,6 +332,7 @@ fn serve(
                     }));
             }
             Message::Gesture(gesture) => inner.emit(Event::Gesture(gesture)),
+            Message::Cinematic(state) => inner.emit(Event::Cinematic(state)),
             Message::Stats(stats) => inner.emit(Event::CameraStats(stats)),
             Message::Log(entry) => inner.emit(Event::CameraLog(entry)),
             Message::Ping(timestamp) => shared.send(&Message::Pong(timestamp)),

@@ -9,6 +9,9 @@
 //! that delay, `--away-media <file>` and `--away-message <text>` set what it shows, and
 //! `--away-now` shows it from the start. With any of them, `--save` keeps the picture from
 //! one second after the away screen first showed instead of the last one.
+//!
+//! `--cinematic` turns Cinematic mode on as soon as the phone announces it, and
+//! `--cinematic-track <x,y>` then asks it to follow whatever is at that point of the picture.
 
 use std::fs;
 use std::net::SocketAddr;
@@ -19,6 +22,7 @@ use std::sync::{Arc as Shared, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use paircam_engine::protocol::{CinematicFocus, ControlValues, Point};
 use paircam_engine::{AwaySettings, CameraFrame, Engine, Event, FrameSink, PreviewFrame};
 
 struct CountingSink {
@@ -49,6 +53,8 @@ fn main() {
     let mut data_directory = std::env::temp_dir().join("paircam-headless");
     let mut away = AwaySettings::default();
     let mut away_now = false;
+    let mut cinematic = false;
+    let mut cinematic_track: Option<Point> = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let mut value = || arguments.next().expect("the option needs a value");
@@ -63,6 +69,15 @@ fn main() {
             "--away-media" => away.media = Some(PathBuf::from(value())),
             "--away-message" => away.message = Some(value()),
             "--away-now" => away_now = true,
+            "--cinematic" => cinematic = true,
+            "--cinematic-track" => {
+                let value = value();
+                let (x, y) = value.split_once(',').expect("a point such as 0.5,0.5");
+                cinematic_track = Some(Point {
+                    x: x.parse().expect("a number"),
+                    y: y.parse().expect("a number"),
+                });
+            }
             other => address = Some(other.parse().expect("an address such as 127.0.0.1:47810")),
         }
     }
@@ -85,14 +100,38 @@ fn main() {
     let events = channels.events.clone();
     {
         let shown = shown.clone();
+        let engine = engine.clone();
         thread::spawn(move || {
+            let mut tracked = false;
             while let Ok(event) = events.recv_blocking() {
                 let at = started.elapsed().as_secs_f32();
                 match event {
-                    Event::Capabilities(capabilities) => println!(
-                        "{at:6.2}s event: capabilities with {} cameras",
-                        capabilities.cameras.len()
-                    ),
+                    Event::Capabilities(capabilities) => {
+                        println!(
+                            "{at:6.2}s event: capabilities with {} cameras, cinematic {:?}",
+                            capabilities.cameras.len(),
+                            capabilities.controls.cinematic
+                        );
+                        if cinematic && capabilities.controls.cinematic.is_some() {
+                            engine.control(ControlValues {
+                                cinematic: Some(true),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    Event::Cinematic(state) => {
+                        if let (Some(point), false) = (cinematic_track, tracked) {
+                            tracked = true;
+                            engine.control(ControlValues {
+                                cinematic_focus: Some(CinematicFocus::Track {
+                                    point,
+                                    strong: true,
+                                }),
+                                ..Default::default()
+                            });
+                        }
+                        println!("{at:6.2}s event: {state:?}");
+                    }
                     Event::Away(status) => {
                         if status.showing {
                             shown.lock().unwrap().get_or_insert_with(Instant::now);

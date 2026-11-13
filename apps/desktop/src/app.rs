@@ -399,6 +399,8 @@ impl PairCamApp {
             }
             Event::Gesture(gesture) => self.show_gesture(gesture, cx),
             Event::Away(status) => self.away_status = status,
+            // Shown over the preview once the Cinematic controls exist.
+            Event::Cinematic(_) => {}
         }
         cx.notify();
     }
