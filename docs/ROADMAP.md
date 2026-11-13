@@ -40,6 +40,10 @@ passes the checks that can run on Windows, but has not run on a real device yet.
       is 1080p at 30 fps for now)
 - [x] Camera, resolution, frame rate, quality and format chosen from the desktop
 - [x] Zoom, exposure, flashlight, focus lock and white-balance lock from the desktop
+- [ ] Cinematic mode: Apple's Cinematic Video live in calls, with the focus directed from the
+      desktop preview (click, click again to lock, long press to hold a distance) or with an
+      open palm. Written; seen working with the simulator, not yet on a real iPhone (it needs
+      iOS 26 and a Dual Wide or TrueDepth camera).
 - [ ] Stabilization, HDR, low-light handling
 - [ ] Heat and battery protection: gradual quality reduction
 - [ ] Delay and smoothness measured and tuned against DroidCam, Camo and Iriun

@@ -43,6 +43,11 @@ native Swift module with a small API: list cameras and formats, start and stop, 
 and emit stats. Frames stay in native memory from the sensor to the socket.
 
 - **Capture and encode:** AVFoundation and VideoToolbox.
+- **Cinematic mode:** on iOS 26, Apple's Cinematic Video capture films from the back Dual Wide
+  or front TrueDepth camera with the lens blur rendered into the frames, so the encoder and
+  the desktop need nothing special. A metadata output reports what the camera could focus on;
+  the desktop draws those subjects over its preview and sends focus commands back, the way
+  taps and long presses work in the Camera app.
 - **Foreground only:** iOS stops the camera when the app leaves the foreground, so the app keeps
   the screen awake and dims it while streaming.
 - **Builds:** EAS Build produces the app in the cloud, so no Mac is required. Builds are

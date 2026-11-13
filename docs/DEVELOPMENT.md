@@ -48,6 +48,12 @@ performs open palm, frame and spread in turn every few seconds and acts on them 
 does. Both are off until the desktop turns them on; `--tracking` and `--gestures` start with them
 on, and `--gesture-seconds <s>` sets the pace.
 
+The simulator plays Cinematic mode too: while the desktop has it on, the background behind
+the person is blurred, the stream drops to 30 frames a second, and the simulator reports the
+face and whatever it was asked to track or hold in `cinematic` messages. With gestures on, an
+open palm pulls the focus to a hand beside the face and back. `--low-light` reports a room
+too dark for it, and `--no-cinematic` plays a phone without it.
+
 For the away screen, `--room` swaps the moving pattern for a still picture and gives the person
 a body, so the picture is empty and still while they are out (about five seconds in every
 thirty). The Windows face detector does not take the orange square for a face, so this
@@ -84,6 +90,10 @@ cargo run -p paircam-engine --example simulator -- --port 47816 --room
 ```bash
 cargo run -p paircam-engine --example headless -- 127.0.0.1:47816 --seconds 26 --away 2 --away-media clip.mp4 --save away.bmp
 ```
+
+`--cinematic` turns Cinematic mode on as soon as the phone announces it, and
+`--cinematic-track <x,y>` then asks it to follow whatever is at that point of the picture; the
+example prints every `cinematic` message.
 
 ## Checking the away screen
 
