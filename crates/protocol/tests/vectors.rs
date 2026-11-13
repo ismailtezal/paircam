@@ -11,9 +11,11 @@ use std::path::PathBuf;
 
 use bytes::Bytes;
 use paircam_protocol::{
-    CameraHandshake, Capabilities, Codec, ControlCapabilities, ControlValues, DeviceId, Gesture,
-    GestureKind, GesturePhase, Hello, HostHandshake, Message, Mode, Opener, PairingKey, Rect,
-    Sealer, SessionKeys, Subject, UNPAIRED, VideoConfig, VideoFrame,
+    CameraHandshake, Capabilities, CinematicCapabilities, CinematicFocus, CinematicState,
+    CinematicSubject, Codec, ControlCapabilities, ControlValues, DeviceId, Gesture, GestureKind,
+    GesturePhase, Hello, HostHandshake, Message, Mode, Opener, PairingKey, Point, Position, Range,
+    Rect, Sealer, SessionKeys, Subject, SubjectFocus, SubjectKind, UNPAIRED, VideoConfig,
+    VideoFrame,
 };
 use serde_json::{Value, json};
 
@@ -175,6 +177,111 @@ fn messages() -> Value {
             Message::Gesture(Gesture {
                 kind: GestureKind::Spread,
                 phase: GesturePhase::Began,
+            }),
+        ),
+        (
+            "gestureCross",
+            Message::Gesture(Gesture {
+                kind: GestureKind::Cross,
+                phase: GesturePhase::Recognised,
+            }),
+        ),
+        (
+            "capabilitiesCinematic",
+            Message::Capabilities(Capabilities {
+                controls: ControlCapabilities {
+                    gestures: vec![GestureKind::Palm, GestureKind::Cross],
+                    cinematic: Some(CinematicCapabilities {
+                        positions: vec![Position::Back, Position::Front],
+                        aperture: Some(Range {
+                            min: 2.0,
+                            max: 16.0,
+                        }),
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        ),
+        (
+            "controlCinematic",
+            Message::Control(ControlValues {
+                cinematic: Some(true),
+                aperture: Some(2.5),
+                ..Default::default()
+            }),
+        ),
+        (
+            "controlCinematicAuto",
+            Message::Control(ControlValues {
+                cinematic_focus: Some(CinematicFocus::Auto),
+                ..Default::default()
+            }),
+        ),
+        (
+            "controlCinematicSubject",
+            Message::Control(ControlValues {
+                cinematic_focus: Some(CinematicFocus::Subject {
+                    id: 12,
+                    strong: true,
+                }),
+                ..Default::default()
+            }),
+        ),
+        (
+            "controlCinematicTrack",
+            Message::Control(ControlValues {
+                cinematic_focus: Some(CinematicFocus::Track {
+                    point: Point { x: 0.25, y: 0.75 },
+                    strong: false,
+                }),
+                ..Default::default()
+            }),
+        ),
+        (
+            "controlCinematicFixed",
+            Message::Control(ControlValues {
+                cinematic_focus: Some(CinematicFocus::Fixed {
+                    point: Point { x: 0.5, y: 0.5 },
+                }),
+                ..Default::default()
+            }),
+        ),
+        (
+            "cinematic",
+            Message::Cinematic(CinematicState {
+                subjects: vec![
+                    CinematicSubject {
+                        id: 12,
+                        kind: SubjectKind::Face,
+                        rect: Rect {
+                            x: 0.375,
+                            y: 0.25,
+                            width: 0.1875,
+                            height: 0.25,
+                        },
+                        focus: SubjectFocus::Weak,
+                    },
+                    CinematicSubject {
+                        id: 13,
+                        kind: SubjectKind::Object,
+                        rect: Rect {
+                            x: 0.625,
+                            y: 0.5,
+                            width: 0.125,
+                            height: 0.125,
+                        },
+                        focus: SubjectFocus::None,
+                    },
+                ],
+                low_light: false,
+            }),
+        ),
+        (
+            "cinematicLowLight",
+            Message::Cinematic(CinematicState {
+                subjects: Vec::new(),
+                low_light: true,
             }),
         ),
     ];

@@ -20,6 +20,7 @@ enum MessageKind {
     static let controlState: UInt8 = 0x21
     static let subject: UInt8 = 0x22
     static let gesture: UInt8 = 0x23
+    static let cinematic: UInt8 = 0x24
     static let stats: UInt8 = 0x30
     static let log: UInt8 = 0x31
     static let ping: UInt8 = 0x3E
@@ -42,6 +43,7 @@ enum Message: Equatable {
     case controlState(ControlValues)
     case subject(SubjectUpdate)
     case gesture(GestureEvent)
+    case cinematic(CinematicState)
     case stats(Stats)
     case log(LogEntry)
     case ping(UInt64)
@@ -79,6 +81,8 @@ enum Message: Equatable {
             return try Message.json(MessageKind.subject, value)
         case .gesture(let value):
             return try Message.json(MessageKind.gesture, value)
+        case .cinematic(let value):
+            return try Message.json(MessageKind.cinematic, value)
         case .stats(let value):
             return try Message.json(MessageKind.stats, value)
         case .log(let value):
@@ -129,6 +133,8 @@ enum Message: Equatable {
             return .subject(try parse("subject", payload))
         case MessageKind.gesture:
             return .gesture(try parse("gesture", payload))
+        case MessageKind.cinematic:
+            return .cinematic(try parse("cinematic", payload))
         case MessageKind.stats:
             return .stats(try parse("stats", payload))
         case MessageKind.log:
@@ -414,6 +420,8 @@ struct ControlCapabilities: Equatable {
     var faceTracking = false
     /// The hand gestures the camera recognises.
     var gestures: [GestureKind] = []
+    /// Cinematic mode, when the phone can do it.
+    var cinematic: CinematicCapabilities? = nil
 }
 
 extension ControlCapabilities: Codable {
@@ -426,6 +434,7 @@ extension ControlCapabilities: Codable {
         case stabilization
         case faceTracking
         case gestures
+        case cinematic
     }
 
     init(from decoder: Decoder) throws {
@@ -438,7 +447,8 @@ extension ControlCapabilities: Codable {
             torch: try container.decodeIfPresent(Bool.self, forKey: .torch) ?? false,
             stabilization: try container.decodeIfPresent([StabilizationMode].self, forKey: .stabilization) ?? [],
             faceTracking: try container.decodeIfPresent(Bool.self, forKey: .faceTracking) ?? false,
-            gestures: try container.decodeIfPresent([GestureKind].self, forKey: .gestures) ?? []
+            gestures: try container.decodeIfPresent([GestureKind].self, forKey: .gestures) ?? [],
+            cinematic: try container.decodeIfPresent(CinematicCapabilities.self, forKey: .cinematic)
         )
     }
 
@@ -464,6 +474,7 @@ extension ControlCapabilities: Codable {
         if !gestures.isEmpty {
             try container.encode(gestures, forKey: .gestures)
         }
+        try container.encodeIfPresent(cinematic, forKey: .cinematic)
     }
 }
 
@@ -535,6 +546,12 @@ struct ControlValues: Codable, Equatable {
     var faceTracking: Bool?
     /// The camera watches for hand gestures while this is on.
     var gestures: Bool?
+    /// Whether Cinematic mode is on.
+    var cinematic: Bool?
+    /// The simulated aperture in Cinematic mode, as an f-number.
+    var aperture: Double?
+    /// Moves the focus in Cinematic mode once. Only in `control`.
+    var cinematicFocus: CinematicFocus?
 }
 
 // MARK: - Face tracking and hand gestures
@@ -574,7 +591,8 @@ extension SubjectUpdate: Codable {
 }
 
 enum GestureKind: String, Codable, Equatable {
-    /// An open palm held up for about a second: toggles face tracking.
+    /// An open palm held up for about a second: in Cinematic mode pulls focus to the hand and
+    /// back, otherwise toggles face tracking.
     case palm
     /// Thumb and index finger in an L shape, held for about a second: zooms in one step.
     case frame
@@ -606,6 +624,204 @@ enum GesturePhase: String, Codable, Equatable {
 struct GestureEvent: Codable, Equatable {
     var kind: GestureKind
     var phase: GesturePhase
+}
+
+// MARK: - Cinematic mode
+
+/// Where and how the camera can film in Cinematic mode.
+struct CinematicCapabilities: Equatable {
+    /// The sides of the phone with a camera that can do it.
+    var positions: [CameraPosition] = []
+    /// The simulated aperture range as f-numbers: the smaller, the stronger the blur.
+    var aperture: ValueRange? = nil
+}
+
+extension CinematicCapabilities: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case positions
+        case aperture
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            positions: try container.decodeIfPresent([CameraPosition].self, forKey: .positions) ?? [],
+            aperture: try container.decodeIfPresent(ValueRange.self, forKey: .aperture)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(positions, forKey: .positions)
+        try container.encodeIfPresent(aperture, forKey: .aperture)
+    }
+}
+
+/// Where Cinematic mode should focus. Written as an object whose `mode` says which case it is.
+enum CinematicFocus: Equatable {
+    /// The camera decides again, racking focus as subjects come, go and turn.
+    case auto
+    /// Focus on a subject from `CinematicState`. A strong focus stays until it leaves the
+    /// picture; a weak one lets the camera rack away when another subject matters more.
+    case subject(id: Int, strong: Bool)
+    /// Find whatever is at the point and follow it, as a tap does.
+    case track(point: PicturePoint, strong: Bool)
+    /// Hold the focus at the distance of whatever is at the point, as a long press does.
+    case fixed(point: PicturePoint)
+    /// A mode this version does not know. Ignored.
+    case unknown
+}
+
+extension CinematicFocus: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case id
+        case strong
+        case point
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let mode = (try? container.decodeIfPresent(String.self, forKey: .mode)) ?? nil
+        let strong = ((try? container.decodeIfPresent(Bool.self, forKey: .strong)) ?? nil) ?? false
+        let point = (try? container.decodeIfPresent(PicturePoint.self, forKey: .point)) ?? nil
+        switch mode {
+        case "auto":
+            self = .auto
+        case "subject":
+            if let id = (try? container.decodeIfPresent(Int.self, forKey: .id)) ?? nil {
+                self = .subject(id: id, strong: strong)
+            } else {
+                self = .unknown
+            }
+        case "track":
+            self = point.map { .track(point: $0, strong: strong) } ?? .unknown
+        case "fixed":
+            self = point.map { .fixed(point: $0) } ?? .unknown
+        default:
+            self = .unknown
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .auto:
+            try container.encode("auto", forKey: .mode)
+        case .subject(let id, let strong):
+            try container.encode("subject", forKey: .mode)
+            try container.encode(id, forKey: .id)
+            try container.encode(strong, forKey: .strong)
+        case .track(let point, let strong):
+            try container.encode("track", forKey: .mode)
+            try container.encode(point, forKey: .point)
+            try container.encode(strong, forKey: .strong)
+        case .fixed(let point):
+            try container.encode("fixed", forKey: .mode)
+            try container.encode(point, forKey: .point)
+        case .unknown:
+            try container.encode("unknown", forKey: .mode)
+        }
+    }
+}
+
+enum SubjectKind: String, Codable, Equatable {
+    case face
+    case head
+    case body
+    case hand
+    case animal
+    /// Anything else that stands out, such as an object held up.
+    case object
+    /// A fixed focus distance the user chose, rather than something followed.
+    case fixed
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        self = try decodeTolerant(decoder, fallback: .unknown)
+    }
+}
+
+/// Whether a subject is in focus, and how firmly.
+enum SubjectFocus: String, Codable, Equatable {
+    case unfocused = "none"
+    /// In focus until the camera finds a better subject.
+    case weak
+    /// In focus until it leaves the picture.
+    case strong
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        self = try decodeTolerant(decoder, fallback: .unknown)
+    }
+}
+
+/// Something Cinematic mode could focus on.
+struct CinematicSubject: Equatable {
+    /// Stays the same while the camera keeps seeing the subject.
+    var id: Int
+    var kind: SubjectKind
+    /// Where it is in the encoded picture, with the origin at the top left and both axes from
+    /// 0 to 1.
+    var rect: PictureRect
+    var focus: SubjectFocus
+}
+
+extension CinematicSubject: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case rect
+        case focus
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decodeIfPresent(Int.self, forKey: .id) ?? 0,
+            kind: try container.decodeIfPresent(SubjectKind.self, forKey: .kind) ?? .unknown,
+            rect: try container.decodeIfPresent(PictureRect.self, forKey: .rect)
+                ?? PictureRect(x: 0, y: 0, width: 0, height: 0),
+            focus: try container.decodeIfPresent(SubjectFocus.self, forKey: .focus) ?? .unfocused
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(rect, forKey: .rect)
+        try container.encode(focus, forKey: .focus)
+    }
+}
+
+/// What Cinematic mode sees and where it focuses, sent while it is on.
+struct CinematicState: Equatable {
+    /// Everything the camera could focus on. At most one is in focus.
+    var subjects: [CinematicSubject] = []
+    /// There is not enough light for Cinematic mode to work well.
+    var lowLight = false
+}
+
+extension CinematicState: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case subjects
+        case lowLight
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            subjects: try container.decodeIfPresent([CinematicSubject].self, forKey: .subjects) ?? [],
+            lowLight: try container.decodeIfPresent(Bool.self, forKey: .lowLight) ?? false
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(subjects, forKey: .subjects)
+        try container.encode(lowLight, forKey: .lowLight)
+    }
 }
 
 enum ThermalLevel: String, Codable, Equatable {

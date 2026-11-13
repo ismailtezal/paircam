@@ -20,6 +20,7 @@ mod kind {
     pub const CONTROL_STATE: u8 = 0x21;
     pub const SUBJECT: u8 = 0x22;
     pub const GESTURE: u8 = 0x23;
+    pub const CINEMATIC: u8 = 0x24;
     pub const STATS: u8 = 0x30;
     pub const LOG: u8 = 0x31;
     pub const PING: u8 = 0x3E;
@@ -43,6 +44,7 @@ pub enum Message {
     ControlState(ControlValues),
     Subject(Subject),
     Gesture(Gesture),
+    Cinematic(CinematicState),
     Stats(Stats),
     Log(LogEntry),
     Ping(u64),
@@ -69,6 +71,7 @@ impl Message {
             Self::ControlState(value) => json(kind::CONTROL_STATE, value),
             Self::Subject(value) => json(kind::SUBJECT, value),
             Self::Gesture(value) => json(kind::GESTURE, value),
+            Self::Cinematic(value) => json(kind::CINEMATIC, value),
             Self::Stats(value) => json(kind::STATS, value),
             Self::Log(value) => json(kind::LOG, value),
             Self::Ping(timestamp) => timestamped(kind::PING, *timestamp),
@@ -100,6 +103,7 @@ impl Message {
             kind::CONTROL_STATE => Self::ControlState(parse("controlState", &payload)?),
             kind::SUBJECT => Self::Subject(parse("subject", &payload)?),
             kind::GESTURE => Self::Gesture(parse("gesture", &payload)?),
+            kind::CINEMATIC => Self::Cinematic(parse("cinematic", &payload)?),
             kind::STATS => Self::Stats(parse("stats", &payload)?),
             kind::LOG => Self::Log(parse("log", &payload)?),
             kind::PING => Self::Ping(timestamp("ping", &payload)?),
@@ -336,6 +340,22 @@ pub struct ControlCapabilities {
     /// The hand gestures the camera can recognise.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gestures: Vec<GestureKind>,
+    /// Cinematic mode: the camera blurs the background like a film lens and racks focus
+    /// between subjects. Absent when the phone cannot do it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cinematic: Option<CinematicCapabilities>,
+}
+
+/// Where and how the camera can film in Cinematic mode.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CinematicCapabilities {
+    /// The sides of the phone with a camera that can do it. With Cinematic mode on, the phone
+    /// films from that camera on the side of the camera the host chose.
+    pub positions: Vec<Position>,
+    /// The simulated aperture range as f-numbers: the smaller, the stronger the blur.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aperture: Option<Range>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -418,6 +438,96 @@ pub struct ControlValues {
     /// Whether the camera watches for hand gestures and acts on them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gestures: Option<bool>,
+    /// Whether Cinematic mode is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cinematic: Option<bool>,
+    /// The simulated aperture in Cinematic mode, as an f-number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aperture: Option<f32>,
+    /// Moves the focus in Cinematic mode once, as a tap or a long press on the preview does.
+    /// Only in `control`; where the focus is shows in [`CinematicState`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cinematic_focus: Option<CinematicFocus>,
+}
+
+/// Where Cinematic mode should focus.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum CinematicFocus {
+    /// The camera decides again, racking focus as subjects come, go and turn.
+    Auto,
+    /// Focus on a subject from [`CinematicState`]. A strong focus stays on it until it leaves
+    /// the picture; a weak one lets the camera rack away when another subject matters more.
+    Subject {
+        id: i64,
+        #[serde(default)]
+        strong: bool,
+    },
+    /// Find whatever is at the point and follow it, as a tap does.
+    Track {
+        point: Point,
+        #[serde(default)]
+        strong: bool,
+    },
+    /// Hold the focus at the distance of whatever is at the point, as a long press does.
+    Fixed { point: Point },
+    /// A mode this version does not know. Ignored.
+    #[serde(other)]
+    Unknown,
+}
+
+/// What Cinematic mode sees and where it focuses, sent while it is on.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CinematicState {
+    /// Everything the camera could focus on, in the encoded picture. At most one is in focus.
+    pub subjects: Vec<CinematicSubject>,
+    /// There is not enough light for Cinematic mode to work well.
+    pub low_light: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CinematicSubject {
+    /// Stays the same while the camera keeps seeing the subject. Use it in
+    /// [`CinematicFocus::Subject`].
+    pub id: i64,
+    pub kind: SubjectKind,
+    /// Where it is in the encoded picture, with both axes from 0 to 1 and the origin at the
+    /// top left.
+    pub rect: Rect,
+    pub focus: SubjectFocus,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubjectKind {
+    Face,
+    Head,
+    Body,
+    Hand,
+    Animal,
+    /// Anything else that stands out, such as an object held up.
+    Object,
+    /// A fixed focus distance the user chose, rather than something followed.
+    Fixed,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// Whether a subject is in focus, and how firmly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubjectFocus {
+    #[default]
+    None,
+    /// In focus until the camera finds a better subject.
+    Weak,
+    /// In focus until it leaves the picture.
+    Strong,
+    #[serde(other)]
+    Unknown,
 }
 
 /// A rectangle in the picture, with both axes from 0 to 1 and the origin at the top left.
@@ -441,10 +551,13 @@ pub struct Subject {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GestureKind {
-    /// An open palm held up: toggles face tracking.
+    /// An open palm held up: in Cinematic mode, pulls focus to the hand and back; otherwise
+    /// toggles face tracking.
     Palm,
-    /// Thumb and index finger in an L shape: zooms to 2× and back.
+    /// Thumb and index finger in an L shape: zooms in one step.
     Frame,
+    /// Two index fingers crossed in an X: zooms out one step.
+    Cross,
     /// Two hands moving apart or together: zooms continuously.
     Spread,
     #[default]
@@ -731,6 +844,123 @@ mod tests {
         .encode();
         assert_eq!(message[0], 0x23);
         assert_eq!(&message[1..], br#"{"kind":"palm","phase":"recognised"}"#);
+    }
+
+    #[test]
+    fn cinematic_messages_round_trip_and_use_the_specified_names() {
+        round_trip(Message::Capabilities(Capabilities {
+            controls: ControlCapabilities {
+                gestures: vec![GestureKind::Palm, GestureKind::Cross],
+                cinematic: Some(CinematicCapabilities {
+                    positions: vec![Position::Back, Position::Front],
+                    aperture: Some(Range {
+                        min: 2.0,
+                        max: 16.0,
+                    }),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        round_trip(Message::Cinematic(CinematicState {
+            subjects: vec![
+                CinematicSubject {
+                    id: 7,
+                    kind: SubjectKind::Face,
+                    rect: Rect {
+                        x: 0.4,
+                        y: 0.2,
+                        width: 0.2,
+                        height: 0.3,
+                    },
+                    focus: SubjectFocus::Strong,
+                },
+                CinematicSubject {
+                    id: 9,
+                    kind: SubjectKind::Object,
+                    rect: Rect::default(),
+                    focus: SubjectFocus::None,
+                },
+            ],
+            low_light: true,
+        }));
+        for focus in [
+            CinematicFocus::Auto,
+            CinematicFocus::Subject {
+                id: 7,
+                strong: true,
+            },
+            CinematicFocus::Track {
+                point: Point { x: 0.5, y: 0.25 },
+                strong: false,
+            },
+            CinematicFocus::Fixed {
+                point: Point { x: 0.1, y: 0.9 },
+            },
+        ] {
+            round_trip(Message::Control(ControlValues {
+                cinematic_focus: Some(focus),
+                ..Default::default()
+            }));
+        }
+
+        let message = Message::Control(ControlValues {
+            cinematic: Some(true),
+            aperture: Some(2.8),
+            cinematic_focus: Some(CinematicFocus::Subject {
+                id: 7,
+                strong: true,
+            }),
+            ..Default::default()
+        })
+        .encode();
+        assert_eq!(
+            &message[1..],
+            br#"{"cinematic":true,"aperture":2.8,"cinematicFocus":{"mode":"subject","id":7,"strong":true}}"#
+        );
+        let message = Message::Cinematic(CinematicState::default()).encode();
+        assert_eq!(message[0], 0x24);
+        assert_eq!(&message[1..], br#"{"subjects":[],"lowLight":false}"#);
+    }
+
+    #[test]
+    fn cinematic_tolerates_unknown_modes_kinds_and_fields() {
+        let mut message = vec![kind::CONTROL];
+        message.extend_from_slice(br#"{"cinematicFocus":{"mode":"telepathy","target":3}}"#);
+        assert_eq!(
+            Message::decode(message).unwrap(),
+            Message::Control(ControlValues {
+                cinematic_focus: Some(CinematicFocus::Unknown),
+                ..Default::default()
+            })
+        );
+
+        let mut message = vec![kind::CONTROL];
+        message
+            .extend_from_slice(br#"{"cinematicFocus":{"mode":"track","point":{"x":0.5,"y":0.5}}}"#);
+        assert_eq!(
+            Message::decode(message).unwrap(),
+            Message::Control(ControlValues {
+                cinematic_focus: Some(CinematicFocus::Track {
+                    point: Point { x: 0.5, y: 0.5 },
+                    strong: false,
+                }),
+                ..Default::default()
+            })
+        );
+
+        let mut message = vec![kind::CINEMATIC];
+        message.extend_from_slice(
+            br#"{"subjects":[{"id":3,"kind":"robot","rect":{"x":0.1,"y":0.1,"width":0.2,"height":0.2},"focus":"blurry","depth":2}],"future":1}"#,
+        );
+        let Message::Cinematic(state) = Message::decode(message).unwrap() else {
+            panic!("expected cinematic");
+        };
+        assert_eq!(state.subjects.len(), 1);
+        assert_eq!(state.subjects[0].id, 3);
+        assert_eq!(state.subjects[0].kind, SubjectKind::Unknown);
+        assert_eq!(state.subjects[0].focus, SubjectFocus::Unknown);
+        assert!(!state.low_light);
     }
 
     #[test]

@@ -126,7 +126,8 @@ tracking:
   framing_close: Close
   gestures: Hand gestures
   gesture_palm: "Open palm: face tracking on or off"
-  gesture_frame: "L shape with thumb and finger: zoom to 2× and back"
+  gesture_frame: "L shape with thumb and finger: zoom in"
+  gesture_cross: "Index fingers crossed in an X: zoom out"
   gesture_spread: "Two hands apart or together: zoom in or out"
 
 away:
@@ -150,6 +151,7 @@ away:
 gesture:
   palm: Open palm
   frame: Frame
+  cross: Cross
   spread: Two-hand zoom
 
 quality:

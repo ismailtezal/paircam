@@ -187,6 +187,47 @@ final class VectorTests: XCTestCase {
             "subjectNone": .subject(SubjectUpdate(face: nil)),
             "gesture": .gesture(GestureEvent(kind: .palm, phase: .recognised)),
             "gestureBegan": .gesture(GestureEvent(kind: .spread, phase: .began)),
+            "gestureCross": .gesture(GestureEvent(kind: .cross, phase: .recognised)),
+            "capabilitiesCinematic": .capabilities(
+                Capabilities(
+                    controls: ControlCapabilities(
+                        gestures: [.palm, .cross],
+                        cinematic: CinematicCapabilities(
+                            positions: [.back, .front],
+                            aperture: ValueRange(min: 2, max: 16)
+                        )
+                    )
+                )
+            ),
+            "controlCinematic": .control(ControlValues(cinematic: true, aperture: 2.5)),
+            "controlCinematicAuto": .control(ControlValues(cinematicFocus: .auto)),
+            "controlCinematicSubject": .control(ControlValues(cinematicFocus: .subject(id: 12, strong: true))),
+            "controlCinematicTrack": .control(
+                ControlValues(cinematicFocus: .track(point: PicturePoint(x: 0.25, y: 0.75), strong: false))
+            ),
+            "controlCinematicFixed": .control(
+                ControlValues(cinematicFocus: .fixed(point: PicturePoint(x: 0.5, y: 0.5)))
+            ),
+            "cinematic": .cinematic(
+                CinematicState(
+                    subjects: [
+                        CinematicSubject(
+                            id: 12,
+                            kind: .face,
+                            rect: PictureRect(x: 0.375, y: 0.25, width: 0.1875, height: 0.25),
+                            focus: .weak
+                        ),
+                        CinematicSubject(
+                            id: 13,
+                            kind: .object,
+                            rect: PictureRect(x: 0.625, y: 0.5, width: 0.125, height: 0.125),
+                            focus: .unfocused
+                        ),
+                    ],
+                    lowLight: false
+                )
+            ),
+            "cinematicLowLight": .cinematic(CinematicState(subjects: [], lowLight: true)),
         ]
 
         let loose = try loadVectors().messages.filter { !$0.exact }

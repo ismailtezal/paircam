@@ -126,7 +126,8 @@ tracking:
   framing_close: Yakın
   gestures: El hareketleri
   gesture_palm: "Açık avuç: yüz takibini aç veya kapat"
-  gesture_frame: "Başparmak ve işaret parmağıyla L: 2× yakınlaştır ve geri dön"
+  gesture_frame: "Başparmak ve işaret parmağıyla L: yakınlaştır"
+  gesture_cross: "İşaret parmaklarıyla X: uzaklaştır"
   gesture_spread: "İki eli açıp kapat: yakınlaştır veya uzaklaştır"
 
 away:
@@ -150,6 +151,7 @@ away:
 gesture:
   palm: Açık avuç
   frame: Çerçeve
+  cross: Çarpı
   spread: İki elle yakınlaştırma
 
 quality:

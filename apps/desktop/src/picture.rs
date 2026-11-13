@@ -275,6 +275,7 @@ fn gesture_icon(kind: GestureKind) -> Option<IconName> {
     match kind {
         GestureKind::Palm => Some(IconName::Hand),
         GestureKind::Frame => Some(IconName::Frame),
+        GestureKind::Cross => Some(IconName::X),
         GestureKind::Spread => Some(IconName::MoveHorizontal),
         GestureKind::Unknown => None,
     }
@@ -285,6 +286,7 @@ fn gesture_description(kind: GestureKind) -> Option<(IconName, SharedString)> {
     let description = match kind {
         GestureKind::Palm => text!("tracking.gesture_palm"),
         GestureKind::Frame => text!("tracking.gesture_frame"),
+        GestureKind::Cross => text!("tracking.gesture_cross"),
         GestureKind::Spread => text!("tracking.gesture_spread"),
         GestureKind::Unknown => return None,
     };
@@ -296,6 +298,7 @@ fn gesture_name(kind: GestureKind) -> Option<SharedString> {
     match kind {
         GestureKind::Palm => Some(text!("gesture.palm")),
         GestureKind::Frame => Some(text!("gesture.frame")),
+        GestureKind::Cross => Some(text!("gesture.cross")),
         GestureKind::Spread => Some(text!("gesture.spread")),
         GestureKind::Unknown => None,
     }

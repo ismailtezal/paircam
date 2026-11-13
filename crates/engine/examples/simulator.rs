@@ -536,6 +536,7 @@ fn capabilities() -> Capabilities {
                 Stabilization::Cinematic,
             ],
             face_tracking: true,
+            cinematic: None,
             gestures: vec![GestureKind::Palm, GestureKind::Frame, GestureKind::Spread],
         },
     }

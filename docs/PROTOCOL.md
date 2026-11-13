@@ -128,6 +128,7 @@ so newer apps can add both without breaking older ones.
 | 0x21 | controlState | camera → host | JSON: current value of every control |
 | 0x22 | subject | camera → host | JSON: where the person is in the picture, while face tracking is on |
 | 0x23 | gesture | camera → host | JSON: a hand gesture the camera recognised |
+| 0x24 | cinematic | camera → host | JSON: what Cinematic mode sees and where it focuses |
 | 0x30 | stats | camera → host | JSON, about once a second while streaming |
 | 0x31 | log | camera → host | JSON: `level`, `tag`, `message` |
 | 0x3E | ping | both | `u64` sender timestamp in microseconds |
@@ -248,7 +249,7 @@ Both are off unless the host or the user turns them on. They are announced in `c
 and switched in `control`, like every other control:
 
 ```json
-"controls": { "faceTracking": true, "gestures": ["palm", "frame", "spread"] }
+"controls": { "faceTracking": true, "gestures": ["palm", "frame", "cross", "spread"] }
 ```
 
 ```json
@@ -276,8 +277,9 @@ acts on them itself, then tells the host so the interface can show what happened
 
 | Gesture | Meaning | What the camera does |
 | --- | --- | --- |
-| `palm` | An open palm held up for about a second | Toggles `faceTracking` and sends `controlState` |
-| `frame` | Thumb and index finger in an L shape, held for about a second | Zooms smoothly to 2× or, if already zoomed in, back to 1× |
+| `palm` | An open palm held up for about a second | In Cinematic mode, pulls the focus to the hand, or back to the camera's own choice if the focus is already held there. Otherwise toggles `faceTracking` and sends `controlState` |
+| `frame` | Thumb and index finger in an L shape, held for about a second | Zooms in one step (2×) |
+| `cross` | Two index fingers crossed in an X, held for about a second | Zooms out one step, never below 1× |
 | `spread` | Two hands moving apart or together | Zooms in or out continuously while the hands move |
 
 ```json
@@ -289,6 +291,67 @@ acts on them itself, then tells the host so the interface can show what happened
 `phase` is `recognised` for a one-off gesture, and `began` then `ended` for a continuous one.
 Zoom changes always ramp smoothly on the camera, whether they come from a gesture or from the
 host, and the camera reports the new value in `controlState` when the ramp settles.
+
+### Cinematic mode
+
+The camera films like a film camera with a wide aperture: the background melts into lens
+blur, and the focus racks from one subject to another as they come, go and turn. The camera
+renders the effect itself, so the frames the host receives already have it. A camera that can
+do it announces it in `capabilities`:
+
+```json
+"controls": { "cinematic": { "positions": ["back", "front"], "aperture": { "min": 2.0, "max": 16.0 } } }
+```
+
+`positions` are the sides of the phone with a camera that can film this way. With Cinematic mode
+on, the camera films from that camera on the side of the camera chosen in `configure` (on an
+iPhone, the back Dual Wide camera or the front TrueDepth camera), at 30 frames a second or less
+and at a size it supports, and reports the real size in `videoConfig`. `aperture` is the range
+of the simulated aperture as f-numbers: the smaller the number, the stronger the blur.
+
+`control` turns it on and off, sets the aperture, and moves the focus. `controlState` reports
+`cinematic` and `aperture`:
+
+```json
+{ "cinematic": true }
+{ "aperture": 2.8 }
+{ "cinematicFocus": { "mode": "auto" } }
+{ "cinematicFocus": { "mode": "subject", "id": 12, "strong": true } }
+{ "cinematicFocus": { "mode": "track", "point": { "x": 0.25, "y": 0.75 }, "strong": false } }
+{ "cinematicFocus": { "mode": "fixed", "point": { "x": 0.5, "y": 0.5 } } }
+```
+
+`cinematicFocus` acts once, like a tap or a long press on the camera's own screen:
+
+| Mode | What the camera does |
+| --- | --- |
+| `auto` | Decides again by itself |
+| `subject` | Focuses on the subject with that `id` from the last `cinematic` message |
+| `track` | Finds whatever is at the point and follows it |
+| `fixed` | Holds the focus at the distance of whatever is at the point, whatever moves |
+
+Points use the encoded picture, origin at the top left, both axes from 0 to 1. A `strong` focus
+stays on its subject until it leaves the picture; a weak one (`strong` false or absent) lets the
+camera rack to another subject that becomes more prominent. A `fixed` focus is always strong.
+A camera ignores a mode it does not know.
+
+While Cinematic mode is on, the camera sends `cinematic` whenever what it sees changes, up to
+10 times a second:
+
+```json
+{
+  "subjects": [
+    { "id": 12, "kind": "face", "rect": { "x": 0.375, "y": 0.25, "width": 0.1875, "height": 0.25 }, "focus": "weak" },
+    { "id": 13, "kind": "object", "rect": { "x": 0.625, "y": 0.5, "width": 0.125, "height": 0.125 }, "focus": "none" }
+  ],
+  "lowLight": false
+}
+```
+
+`kind` is `face`, `head`, `body`, `hand`, `animal`, `object` or `fixed` (a fixed focus distance
+rather than a subject). `focus` is `none`, `weak` or `strong`; at most one subject is in
+focus. `rect` uses the encoded picture like `subject`. `lowLight` says the room is too dark for
+the effect to work well. A subject keeps its `id` while the camera keeps seeing it.
 
 ## Flow control
 

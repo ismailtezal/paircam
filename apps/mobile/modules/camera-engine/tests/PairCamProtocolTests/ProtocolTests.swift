@@ -376,6 +376,61 @@ final class MessageTests: XCTestCase {
         XCTAssertEqual(try Message.decode(future), .gesture(GestureEvent(kind: .unknown, phase: .unknown)))
     }
 
+    func testCinematicFocusMatchesTheSpecification() throws {
+        let message = try Message.control(ControlValues(cinematicFocus: .subject(id: 7, strong: true))).encode()
+        XCTAssertEqual(message.first, 0x20)
+        let payload = Data([UInt8](message).dropFirst())
+        let object = try JSONSerialization.jsonObject(with: payload) as? [String: [String: Any]]
+        let focus = try XCTUnwrap(object?["cinematicFocus"])
+        XCTAssertEqual(focus["mode"] as? String, "subject")
+        XCTAssertEqual(focus["id"] as? Int, 7)
+        XCTAssertEqual(focus["strong"] as? Bool, true)
+
+        // A tap from an older host leaves out `strong`: weak.
+        var tap = Data([MessageKind.control])
+        tap.append(Data(#"{"cinematicFocus":{"mode":"track","point":{"x":0.5,"y":0.25}}}"#.utf8))
+        XCTAssertEqual(
+            try Message.decode(tap),
+            .control(ControlValues(cinematicFocus: .track(point: PicturePoint(x: 0.5, y: 0.25), strong: false)))
+        )
+
+        // Unknown modes, and known modes missing what they need, are ignored rather than failing
+        // the whole control message.
+        for json in [
+            #"{"cinematicFocus":{"mode":"telepathy","target":3},"zoom":2}"#,
+            #"{"cinematicFocus":{"mode":"subject"},"zoom":2}"#,
+            #"{"cinematicFocus":{"mode":"fixed","point":"middle"},"zoom":2}"#,
+        ] {
+            var future = Data([MessageKind.control])
+            future.append(Data(json.utf8))
+            XCTAssertEqual(try Message.decode(future), .control(ControlValues(zoom: 2, cinematicFocus: .unknown)), json)
+        }
+    }
+
+    func testCinematicStateToleratesUnknownKindsAndFields() throws {
+        var message = Data([MessageKind.cinematic])
+        message.append(
+            Data(
+                #"{"subjects":[{"id":3,"kind":"robot","rect":{"x":0.1,"y":0.1,"width":0.2,"height":0.2},"focus":"blurry","depth":2}],"future":1}"#
+                    .utf8
+            )
+        )
+        guard case .cinematic(let state) = try Message.decode(message) else {
+            return XCTFail("expected cinematic")
+        }
+        XCTAssertEqual(state.subjects.count, 1)
+        XCTAssertEqual(state.subjects.first?.id, 3)
+        XCTAssertEqual(state.subjects.first?.kind, .unknown)
+        XCTAssertEqual(state.subjects.first?.focus, .unknown)
+        XCTAssertFalse(state.lowLight)
+
+        let empty = try Message.cinematic(CinematicState()).encode()
+        XCTAssertEqual(empty.first, 0x24)
+        let object = try JSONSerialization.jsonObject(with: Data([UInt8](empty).dropFirst())) as? [String: Any]
+        XCTAssertEqual((object?["subjects"] as? [Any])?.count, 0)
+        XCTAssertEqual(object?["lowLight"] as? Bool, false)
+    }
+
     func testSkipsUnknownMessageTypes() throws {
         XCTAssertEqual(try Message.decode(Data([0x6A, 1, 2, 3])), .unknown(0x6A))
     }
