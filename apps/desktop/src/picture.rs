@@ -189,9 +189,13 @@ impl PictureControls {
         if !capabilities.face_tracking && gestures.is_empty() {
             return None;
         }
+        // In Cinematic mode the open palm moves the focus instead, and that is its only use on a
+        // phone without face tracking.
+        let palm_focuses = values.cinematic == Some(true)
+            || (capabilities.cinematic.is_some() && !capabilities.face_tracking);
         let muted = cx.theme().muted_foreground;
         let gesture_rows = gestures.iter().filter_map(|kind| {
-            let (icon, description) = gesture_description(*kind)?;
+            let (icon, description) = gesture_description(*kind, palm_focuses)?;
             Some(
                 div()
                     .h_flex()
@@ -281,9 +285,11 @@ fn gesture_icon(kind: GestureKind) -> Option<IconName> {
     }
 }
 
-/// What a gesture does, for the Tracking section.
-fn gesture_description(kind: GestureKind) -> Option<(IconName, SharedString)> {
+/// What a gesture does, for the Tracking section. `palm_focuses` when the open palm moves the
+/// focus in Cinematic mode rather than switching face tracking.
+fn gesture_description(kind: GestureKind, palm_focuses: bool) -> Option<(IconName, SharedString)> {
     let description = match kind {
+        GestureKind::Palm if palm_focuses => text!("tracking.gesture_palm_cinematic"),
         GestureKind::Palm => text!("tracking.gesture_palm"),
         GestureKind::Frame => text!("tracking.gesture_frame"),
         GestureKind::Cross => text!("tracking.gesture_cross"),

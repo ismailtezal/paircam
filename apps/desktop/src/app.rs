@@ -19,12 +19,13 @@ use gpui_kit::{
     AnyElement, AppContext as _, Bounds, Context, Entity, FontWeight, InteractiveElement as _,
     IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _,
     Pixels, Point, Render, RenderImage, ScrollEvent, SharedString, StatefulInteractiveElement as _,
-    Styled as _, StyledImage as _, Subscription, Window, black, canvas, div, img, px,
+    Styled as _, StyledImage as _, Subscription, Window, black, canvas, div, img, point, px, size,
 };
 use image::{Frame, RgbaImage};
-use paircam_engine::picture::{OUTPUT_HEIGHT, OUTPUT_WIDTH};
+use paircam_engine::picture::{self, OUTPUT_HEIGHT, OUTPUT_WIDTH};
 use paircam_engine::protocol::{
-    Capabilities, ControlValues, DEFAULT_PORT, Gesture, GesturePhase, LogEntry, Stats, Thermal,
+    Capabilities, CinematicFocus, ControlValues, DEFAULT_PORT, Gesture, GesturePhase, LogEntry,
+    Stats, Thermal,
 };
 use paircam_engine::vcam::VirtualCamera;
 use paircam_engine::{
@@ -39,6 +40,7 @@ use smallvec::SmallVec;
 
 use crate::away::AwayControls;
 use crate::camera::{self, CameraStatus};
+use crate::cinematic::{self, FocusMark, FocusOverlay, PictureLayout};
 use crate::colour::ColourControls;
 use crate::controls::StreamControls;
 use crate::picture::{GestureNotice, PictureControls};
@@ -48,6 +50,14 @@ use crate::text;
 /// How fast the scroll wheel zooms the picture: the zoom factor per pixel scrolled is
 /// `exp(WHEEL_ZOOM_RATE)`, so a typical notch of 120 px zooms by about a third.
 const WHEEL_ZOOM_RATE: f32 = 0.0025;
+
+/// How long a press on the preview is held, without moving, before it keeps the focus at that
+/// distance in Cinematic mode. Shorter is a click.
+const LONG_PRESS: Duration = Duration::from_millis(300);
+
+/// How far a press on the preview may move, in pixels, and still be a click or a long press
+/// rather than a drag. Windows uses the same distance for its own drags.
+const DRAG_DISTANCE: f32 = 4.0;
 
 /// What the app is started with.
 /// How long after a change made here the phone's reports are treated as its echo.
@@ -63,6 +73,20 @@ pub struct Startup {
     pub preferences: Preferences,
     /// The feed to the virtual camera, kept alive for the whole run.
     pub camera: Option<VirtualCamera>,
+}
+
+/// A press on the preview, until it turns out to be a click, a long press or a drag.
+struct Press {
+    /// Tells presses apart, so a long-press timer only acts on the press it was started for.
+    id: u64,
+    /// Where it went down, in window coordinates.
+    at: Point<Pixels>,
+    /// Where the pointer was at the last step of a drag, once it has moved far enough to be one.
+    dragged_to: Option<Point<Pixels>>,
+    /// Whether the drag moved the zoomed picture, which then has to be told the pan ended.
+    panned: bool,
+    /// Whether it was held long enough to keep the focus at that distance.
+    held: bool,
 }
 
 /// One phone on the connect screen.
@@ -118,10 +142,14 @@ pub struct PairCamApp {
     away_controls: AwayControls,
     gesture_notice: Option<GestureNotice>,
     next_notice_id: u64,
-    /// Where the stage was last laid out, for turning drags into pans.
+    /// What Cinematic mode reports, and the focus boxes it draws over the preview.
+    focus_overlay: FocusOverlay,
+    /// Where the stage was last laid out, for turning drags into pans and clicks into points of
+    /// the picture.
     stage_bounds: Rc<Cell<Bounds<Pixels>>>,
-    /// Where the pointer was at the last step of a drag on the preview.
-    pan_from: Option<Point<Pixels>>,
+    /// The press on the preview under way, if any.
+    press: Option<Press>,
+    next_press_id: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -241,8 +269,10 @@ impl PairCamApp {
             away,
             gesture_notice: None,
             next_notice_id: 0,
+            focus_overlay: FocusOverlay::default(),
             stage_bounds: Rc::new(Cell::new(Bounds::default())),
-            pan_from: None,
+            press: None,
+            next_press_id: 0,
             paired: engine.paired_cameras(),
             discovered: Vec::new(),
             auto_connect: true,
@@ -361,6 +391,9 @@ impl PairCamApp {
             }
             Event::ControlState(controls) => {
                 self.controls = controls;
+                if self.controls.cinematic != Some(true) {
+                    self.focus_overlay.clear();
+                }
                 // The sliders start from the first values the phone reports. Later reports echo
                 // the user’s own changes and must not rebuild a slider that is being dragged.
                 // A report that arrives while the user is dragging is the echo of that drag;
@@ -399,8 +432,7 @@ impl PairCamApp {
             }
             Event::Gesture(gesture) => self.show_gesture(gesture, cx),
             Event::Away(status) => self.away_status = status,
-            // Shown over the preview once the Cinematic controls exist.
-            Event::Cinematic(_) => {}
+            Event::Cinematic(state) => self.focus_overlay.update(state, cx),
         }
         cx.notify();
     }
@@ -510,36 +542,221 @@ impl PairCamApp {
         (shown_width, shown_width / aspect)
     }
 
-    fn start_pan(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
-        if self.picture.is_zoomed() && !self.tracking() {
-            self.pan_from = Some(event.position);
-            cx.notify();
+    /// Where the 16:9 frame sits on the stage, in the stage's own pixels: as large as fits, in
+    /// the middle.
+    fn frame_bounds(&self) -> Bounds<Pixels> {
+        let stage = self.stage_bounds.get().size;
+        let (width, height) = self.shown_picture_size();
+        Bounds::new(
+            point(
+                (stage.width - px(width)) / 2.0,
+                (stage.height - px(height)) / 2.0,
+            ),
+            size(px(width), px(height)),
+        )
+    }
+
+    /// The point of the frame under a position in the window, as fractions of the frame, or
+    /// `None` outside it.
+    fn frame_point(&self, position: Point<Pixels>) -> Option<picture::Point> {
+        let frame = self.frame_bounds();
+        if frame.size.width < px(1.0) || frame.size.height < px(1.0) {
+            return None;
+        }
+        let local = position - self.stage_bounds.get().origin - frame.origin;
+        let point = picture::Point {
+            x: f32::from(local.x) / f32::from(frame.size.width),
+            y: f32::from(local.y) / f32::from(frame.size.height),
+        };
+        ((0.0..=1.0).contains(&point.x) && (0.0..=1.0).contains(&point.y)).then_some(point)
+    }
+
+    /// The part of the frame the camera picture covers, as fractions of it: all of it, unless
+    /// Fit leaves bars around a picture of another shape.
+    fn picture_area(&self) -> picture::Rect {
+        match self.video.as_ref() {
+            // Face tracking crops to the frame's own shape, which never leaves bars.
+            Some(video) if !self.tracking() => {
+                let (_, view) = picture::plan(
+                    picture::manual_crop(&self.picture),
+                    &self.picture,
+                    (video.width, video.height),
+                    (OUTPUT_WIDTH, OUTPUT_HEIGHT),
+                );
+                view.content
+            }
+            _ => picture::Rect::FULL,
         }
     }
 
-    fn pan(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some(from) = self.pan_from else {
+    /// Whether dragging the preview pans it: while zoomed in, unless face tracking frames it.
+    fn pannable(&self) -> bool {
+        self.preview.is_some() && self.picture.is_zoomed() && !self.tracking()
+    }
+
+    /// Whether clicks on the preview direct the focus: in Cinematic mode, while the preview
+    /// shows the camera rather than the away screen.
+    fn directing_focus(&self) -> bool {
+        self.controls.cinematic == Some(true) && self.preview.is_some() && !self.away_status.showing
+    }
+
+    fn press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let directing = self.directing_focus();
+        if !directing && !self.pannable() {
+            return;
+        }
+        self.next_press_id += 1;
+        let id = self.next_press_id;
+        self.press = Some(Press {
+            id,
+            at: event.position,
+            dragged_to: None,
+            panned: false,
+            held: false,
+        });
+        if directing {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(LONG_PRESS).await;
+                let _ = this.update(cx, |this, cx| this.long_press(id, cx));
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    /// Follows the pointer while pressed. Once it moves far enough to be a drag, the zoomed
+    /// picture catches up with it and then follows it exactly.
+    fn drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if self.press.is_none() {
+            return;
+        }
+        if event.pressed_button != Some(MouseButton::Left) {
+            // The button came up where this view did not hear it.
+            self.release(false, cx);
+            return;
+        }
+        let pannable = self.pannable();
+        let (width, height) = self.shown_picture_size();
+        let Some(press) = self.press.as_mut() else {
             return;
         };
-        if event.pressed_button != Some(MouseButton::Left) {
-            self.end_pan(cx);
-            return;
+        let from = match press.dragged_to {
+            Some(from) => from,
+            None => {
+                let moved = event.position - press.at;
+                let distance = f32::from(moved.x).hypot(f32::from(moved.y));
+                if press.held || distance < DRAG_DISTANCE {
+                    return;
+                }
+                press.at
+            }
+        };
+        press.dragged_to = Some(event.position);
+        if pannable && width >= 1.0 && height >= 1.0 {
+            let delta = event.position - from;
+            press.panned = true;
+            self.engine
+                .pan_picture(f32::from(delta.x) / width, f32::from(delta.y) / height);
         }
-        let (width, height) = self.shown_picture_size();
-        if width < 1.0 || height < 1.0 {
-            return;
-        }
-        let delta = event.position - from;
-        self.pan_from = Some(event.position);
-        self.engine
-            .pan_picture(f32::from(delta.x) / width, f32::from(delta.y) / height);
     }
 
-    fn end_pan(&mut self, cx: &mut Context<Self>) {
-        if self.pan_from.take().is_some() {
+    /// Ends the press. Released over the preview without having moved or been held, it was a
+    /// click.
+    fn release(&mut self, over_preview: bool, cx: &mut Context<Self>) {
+        let Some(press) = self.press.take() else {
+            return;
+        };
+        if press.panned {
             self.engine.end_pan();
-            cx.notify();
         }
+        let click = press.dragged_to.is_none() && !press.held;
+        if over_preview && click && self.directing_focus() {
+            self.click_focus(press.at, cx);
+        }
+        cx.notify();
+    }
+
+    fn long_press(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(press) = self
+            .press
+            .as_mut()
+            .filter(|press| press.id == id && press.dragged_to.is_none() && !press.held)
+        else {
+            return;
+        };
+        press.held = true;
+        let at = press.at;
+        if self.directing_focus() {
+            self.hold_focus(at, cx);
+        }
+    }
+
+    /// A click on the preview in Cinematic mode, as a tap in the Camera app: on a subject it
+    /// focuses there, holds the focus or lets it go; anywhere else the camera follows whatever
+    /// is there. A click on the bars around the picture does nothing.
+    fn click_focus(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(point) = self.frame_point(at) else {
+            return;
+        };
+        let Some(target) = self.engine.view_point_in_picture(point) else {
+            return;
+        };
+        let engine = &self.engine;
+        let clicked = self
+            .focus_overlay
+            .subject_at(point, |rect| engine.picture_rect_in_view(rect));
+        let focus = match clicked {
+            Some((subject, shown)) => {
+                let focus = cinematic::focus_after_click(&subject);
+                // Letting go of a focus held at a distance has nothing to mark; the boxes show
+                // where the camera goes.
+                if let CinematicFocus::Subject { strong, .. } = focus {
+                    let mark = if strong {
+                        FocusMark::Held
+                    } else {
+                        FocusMark::Weak
+                    };
+                    self.focus_overlay.pulse(shown, mark);
+                }
+                focus
+            }
+            None => {
+                let square = cinematic::focus_square(point);
+                self.focus_overlay.pulse(square, FocusMark::Weak);
+                CinematicFocus::Track {
+                    point: target,
+                    strong: false,
+                }
+            }
+        };
+        self.set_cinematic_focus(focus, cx);
+    }
+
+    /// A long press on the preview in Cinematic mode: the focus stays at the distance of
+    /// whatever is there, whatever moves.
+    fn hold_focus(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(point) = self.frame_point(at) else {
+            return;
+        };
+        let Some(target) = self.engine.view_point_in_picture(point) else {
+            return;
+        };
+        let square = cinematic::focus_square(point);
+        self.focus_overlay.pulse(square, FocusMark::Held);
+        self.set_cinematic_focus(CinematicFocus::Fixed { point: target }, cx);
+    }
+
+    /// Moves the focus in Cinematic mode, and shows the boxes for a moment so the move can be
+    /// seen.
+    pub(crate) fn set_cinematic_focus(&mut self, focus: CinematicFocus, cx: &mut Context<Self>) {
+        self.focus_overlay.show_for_a_moment(cx);
+        self.set_control(
+            ControlValues {
+                cinematic_focus: Some(focus),
+                ..Default::default()
+            },
+            cx,
+        );
     }
 
     fn wheel_zoom(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
@@ -582,7 +799,8 @@ impl PairCamApp {
         self.camera_stats = None;
         self.link = LinkStats::default();
         self.gesture_notice = None;
-        if self.pan_from.take().is_some() {
+        self.focus_overlay = FocusOverlay::default();
+        if self.press.take().is_some_and(|press| press.panned) {
             self.engine.end_pan();
         }
         for image in [self.preview.take(), self.retired_preview.take()]
@@ -686,7 +904,17 @@ impl PairCamApp {
         current.stabilization = change.stabilization.or(current.stabilization);
         current.face_tracking = change.face_tracking.or(current.face_tracking);
         current.gestures = change.gestures.or(current.gestures);
+        current.cinematic = change.cinematic.or(current.cinematic);
+        current.aperture = change.aperture.or(current.aperture);
+        if change.cinematic == Some(false) {
+            self.focus_overlay.clear();
+        }
         cx.notify();
+    }
+
+    /// The camera controls as last reported, with the user's own changes since.
+    pub(crate) fn controls(&self) -> &ControlValues {
+        &self.controls
     }
 
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1112,10 +1340,23 @@ impl PairCamApp {
                 .into_any_element(),
         };
 
-        // The preview can be dragged to pan while zoomed in, and zoomed with the wheel.
-        let pannable = self.preview.is_some() && self.picture.is_zoomed() && !self.tracking();
-        let panning = self.pan_from.is_some();
+        // The preview can be dragged to pan while zoomed in, and zoomed with the wheel. In
+        // Cinematic mode, a click or a long press on it directs the focus.
+        let pannable = self.pannable();
+        let panning = pannable && self.press.is_some();
         let stage_bounds = self.stage_bounds.clone();
+        let engine = &self.engine;
+        let focus_boxes = self.focus_overlay.render(
+            PictureLayout {
+                frame: self.frame_bounds(),
+                area: self.picture_area(),
+            },
+            self.directing_focus(),
+            self.press.is_some(),
+            |rect| engine.picture_rect_in_view(rect),
+            window,
+            cx,
+        );
 
         div()
             .flex_1()
@@ -1140,24 +1381,29 @@ impl PairCamApp {
                         .size_full(),
                     )
                     .child(picture)
+                    .children(focus_boxes)
                     .when(pannable && !panning, |stage| stage.cursor_grab())
                     .when(panning, |stage| stage.cursor_grabbing())
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        this.focus_overlay.set_hovered(*hovered);
+                        cx.notify();
+                    }))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.start_pan(event, cx);
+                            this.press(event, cx);
                         }),
                     )
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                        this.pan(event, cx);
+                        this.drag(event, cx);
                     }))
                     .on_mouse_up(
                         MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.end_pan(cx)),
+                        cx.listener(|this, _, _, cx| this.release(true, cx)),
                     )
                     .on_mouse_up_out(
                         MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.end_pan(cx)),
+                        cx.listener(|this, _, _, cx| this.release(false, cx)),
                     )
                     .when(self.preview.is_some(), |stage| {
                         stage.on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
@@ -1260,73 +1506,72 @@ impl PairCamApp {
             Thermal::Unknown => text!("thermal.unknown"),
         });
 
-        let sections = div()
-            .id("inspector-sections")
-            .v_flex()
-            .flex_1()
-            .min_h_0()
-            .gap_5()
-            .p_4()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(section_label(text!("inspector.device"), cx))
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Icon::new(IconName::Smartphone)
-                                    .size_4()
-                                    .text_color(cx.theme().muted_foreground),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(font::size::MD))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .truncate()
-                                    .child(SharedString::from(camera_name.to_owned())),
-                            ),
-                    )
-                    .child(Self::detail_row(text!("inspector.webcam"), webcam, cx))
-                    .when_some(battery, |section, battery| {
-                        section.child(Self::detail_row(text!("inspector.battery"), battery, cx))
-                    })
-                    .when_some(temperature, |section, temperature| {
-                        section.child(Self::detail_row(
-                            text!("inspector.temperature"),
-                            temperature,
-                            cx,
-                        ))
-                    }),
-            )
-            .children(
-                self.stream_controls
-                    .as_ref()
-                    .map(|controls| controls.render(&self.controls, cx)),
-            )
-            .child(
-                self.picture_controls
-                    .render_picture(&self.picture, self.tracking(), cx),
-            )
-            .child(self.colour_controls.render(&self.picture.colour, cx))
-            .children(self.stream_controls.as_ref().and_then(|controls| {
-                self.picture_controls.render_tracking(
-                    &controls.capabilities().controls,
-                    &self.controls,
-                    &self.picture,
-                    cx,
+        let sections =
+            div()
+                .id("inspector-sections")
+                .v_flex()
+                .flex_1()
+                .min_h_0()
+                .gap_5()
+                .p_4()
+                .overflow_y_scroll()
+                .child(
+                    div()
+                        .v_flex()
+                        .gap_3()
+                        .child(section_label(text!("inspector.device"), cx))
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Icon::new(IconName::Smartphone)
+                                        .size_4()
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(font::size::MD))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .truncate()
+                                        .child(SharedString::from(camera_name.to_owned())),
+                                ),
+                        )
+                        .child(Self::detail_row(text!("inspector.webcam"), webcam, cx))
+                        .when_some(battery, |section, battery| {
+                            section.child(Self::detail_row(text!("inspector.battery"), battery, cx))
+                        })
+                        .when_some(temperature, |section, temperature| {
+                            section.child(Self::detail_row(
+                                text!("inspector.temperature"),
+                                temperature,
+                                cx,
+                            ))
+                        }),
                 )
-            }))
-            .child(self.away_controls.render(
-                &self.away,
-                self.away_status,
-                self.engine.away_now(),
-                cx,
-            ));
+                .children(self.stream_controls.as_ref().map(|controls| {
+                    controls.render(&self.controls, self.focus_overlay.state(), cx)
+                }))
+                .child(
+                    self.picture_controls
+                        .render_picture(&self.picture, self.tracking(), cx),
+                )
+                .child(self.colour_controls.render(&self.picture.colour, cx))
+                .children(self.stream_controls.as_ref().and_then(|controls| {
+                    self.picture_controls.render_tracking(
+                        &controls.capabilities().controls,
+                        &self.controls,
+                        &self.picture,
+                        cx,
+                    )
+                }))
+                .child(self.away_controls.render(
+                    &self.away,
+                    self.away_status,
+                    self.engine.away_now(),
+                    cx,
+                ));
 
         // The sections scroll; the way out stays in reach at the bottom.
         div()

@@ -14,6 +14,7 @@ use paircam_engine::vcam::VirtualCamera;
 mod app;
 mod away;
 mod camera;
+mod cinematic;
 mod colour;
 mod controls;
 mod gallery;

@@ -79,6 +79,23 @@ inspector:
   focus_lock: Lock focus
   white_balance_lock: Lock white balance
 
+cinematic:
+  mode: Cinematic mode
+  hint: "Movie-style background blur, with focus that moves between people. Streams at 30 fps."
+  blur: Background blur
+  focus_automatic: "Focus: automatic"
+  held_face: "Focus: held on a face"
+  held_head: "Focus: held on a head"
+  held_body: "Focus: held on a person"
+  held_hand: "Focus: held on a hand"
+  held_animal: "Focus: held on an animal"
+  held_object: "Focus: held on an object"
+  held_distance: "Focus: held at a set distance"
+  held_subject: "Focus: held on a subject"
+  automatic: Automatic
+  how_to_focus: Click someone in the picture to focus on them, and again to hold it there. Press and hold to keep the focus at that distance.
+  low_light: Needs more light for the blur to work well
+
 picture:
   title: PICTURE
   reset: Reset
@@ -126,6 +143,7 @@ tracking:
   framing_close: Close
   gestures: Hand gestures
   gesture_palm: "Open palm: face tracking on or off"
+  gesture_palm_cinematic: "Open palm: focus on your hand, or back to you (Cinematic mode)"
   gesture_frame: "L shape with thumb and finger: zoom in"
   gesture_cross: "Index fingers crossed in an X: zoom out"
   gesture_spread: "Two hands apart or together: zoom in or out"

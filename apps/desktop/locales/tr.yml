@@ -79,6 +79,23 @@ inspector:
   focus_lock: Odağı kilitle
   white_balance_lock: Beyaz dengesini kilitle
 
+cinematic:
+  mode: Sinematik mod
+  hint: "Film gibi arka plan bulanıklığı ve kişiler arasında kendiliğinden geçen odak. 30 fps yayın yapar."
+  blur: Arka plan bulanıklığı
+  focus_automatic: "Odak: otomatik"
+  held_face: "Odak: yüze sabitlendi"
+  held_head: "Odak: başa sabitlendi"
+  held_body: "Odak: kişiye sabitlendi"
+  held_hand: "Odak: ele sabitlendi"
+  held_animal: "Odak: hayvana sabitlendi"
+  held_object: "Odak: nesneye sabitlendi"
+  held_distance: "Odak: seçilen uzaklığa sabitlendi"
+  held_subject: "Odak: bir özneye sabitlendi"
+  automatic: Otomatik
+  how_to_focus: Odaklamak için görüntüde birine tıkla, odağı orada tutmak için yine tıkla. Odağı o uzaklıkta tutmak için basılı tut.
+  low_light: Bulanıklığın iyi görünmesi için daha fazla ışık gerekiyor
+
 picture:
   title: GÖRÜNTÜ
   reset: Sıfırla
@@ -126,6 +143,7 @@ tracking:
   framing_close: Yakın
   gestures: El hareketleri
   gesture_palm: "Açık avuç: yüz takibini aç veya kapat"
+  gesture_palm_cinematic: "Açık avuç: odak eline geçer veya sana döner (Sinematik mod)"
   gesture_frame: "Başparmak ve işaret parmağıyla L: yakınlaştır"
   gesture_cross: "İşaret parmaklarıyla X: uzaklaştır"
   gesture_spread: "İki eli açıp kapat: yakınlaştır veya uzaklaştır"

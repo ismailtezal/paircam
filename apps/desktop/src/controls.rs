@@ -11,12 +11,14 @@ use gpui_kit::{
 };
 use paircam_engine::StreamPreferences;
 use paircam_engine::protocol::{
-    Capabilities, Codec, ControlValues, FocusMode, Format, Lens, Position, WhiteBalanceMode,
+    Capabilities, CinematicState, Codec, ControlValues, FocusMode, Format, Lens, Position,
+    WhiteBalanceMode,
 };
 use paircam_ui::section_label;
 use paircam_ui::tokens::font;
 
 use crate::app::PairCamApp;
+use crate::cinematic::{self, CinematicControls};
 use crate::text;
 
 type Choice = Entity<SelectState<Vec<SharedString>>>;
@@ -45,6 +47,8 @@ pub struct StreamControls {
     codec: Choice,
     zoom: Option<Entity<SliderState>>,
     exposure: Option<Entity<SliderState>>,
+    /// `None` when the phone cannot film in Cinematic mode at all.
+    cinematic: Option<CinematicControls>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -219,6 +223,11 @@ impl StreamControls {
                 cx,
             )
         });
+        let cinematic = capabilities
+            .controls
+            .cinematic
+            .as_ref()
+            .map(|cinematic| CinematicControls::new(cinematic, values, cx));
 
         Some(Self {
             capabilities,
@@ -232,6 +241,7 @@ impl StreamControls {
             codec,
             zoom,
             exposure,
+            cinematic,
             _subscriptions: subscriptions,
         })
     }
@@ -249,6 +259,19 @@ impl StreamControls {
                 slider.update(cx, |slider, cx| slider.set_value(value, window, cx));
             }
         }
+        if let Some(cinematic) = self.cinematic.as_ref() {
+            cinematic.sync(values, window, cx);
+        }
+    }
+
+    /// The Cinematic mode controls, when the chosen camera can film that way. They also stay
+    /// while it is on, so it can always be turned off.
+    fn cinematic(&self, values: &ControlValues) -> Option<&CinematicControls> {
+        let capabilities = self.capabilities.controls.cinematic.as_ref()?;
+        let camera = self.capabilities.cameras.get(self.camera_index);
+        self.cinematic.as_ref().filter(|_| {
+            values.cinematic == Some(true) || cinematic::supported(capabilities, camera)
+        })
     }
 
     pub fn capabilities(&self) -> &Capabilities {
@@ -281,10 +304,20 @@ impl StreamControls {
         })
     }
 
-    pub fn render(&self, values: &ControlValues, cx: &mut Context<PairCamApp>) -> impl IntoElement {
+    pub fn render(
+        &self,
+        values: &ControlValues,
+        cinematic: Option<&CinematicState>,
+        cx: &mut Context<PairCamApp>,
+    ) -> impl IntoElement {
         let controls = &self.capabilities.controls;
         let focus_locked = matches!(values.focus, Some(FocusMode::Locked | FocusMode::Manual));
         let white_balance_locked = values.white_balance == Some(WhiteBalanceMode::Locked);
+        // Cinematic mode decides the focus itself, and the phone ignores the lens lock meanwhile.
+        let cinematic_on = values.cinematic == Some(true);
+        let cinematic = self
+            .cinematic(values)
+            .map(|controls| controls.render(values, cinematic, cx));
 
         div()
             .v_flex()
@@ -351,22 +384,25 @@ impl StreamControls {
                             cx,
                         ))
                     })
-                    .when(controls.focus.contains(&FocusMode::Locked), |section| {
-                        section.child(toggle(
-                            "focus-lock",
-                            text!("inspector.focus_lock"),
-                            focus_locked,
-                            |on| ControlValues {
-                                focus: Some(if on {
-                                    FocusMode::Locked
-                                } else {
-                                    FocusMode::Auto
-                                }),
-                                ..Default::default()
-                            },
-                            cx,
-                        ))
-                    })
+                    .when(
+                        controls.focus.contains(&FocusMode::Locked) && !cinematic_on,
+                        |section| {
+                            section.child(toggle(
+                                "focus-lock",
+                                text!("inspector.focus_lock"),
+                                focus_locked,
+                                |on| ControlValues {
+                                    focus: Some(if on {
+                                        FocusMode::Locked
+                                    } else {
+                                        FocusMode::Auto
+                                    }),
+                                    ..Default::default()
+                                },
+                                cx,
+                            ))
+                        },
+                    )
                     .when(
                         controls.white_balance.contains(&WhiteBalanceMode::Locked),
                         |section| {
@@ -385,7 +421,8 @@ impl StreamControls {
                                 cx,
                             ))
                         },
-                    ),
+                    )
+                    .children(cinematic),
             )
     }
 }

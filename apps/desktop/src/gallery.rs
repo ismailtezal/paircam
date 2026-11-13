@@ -20,7 +20,7 @@ use gpui_kit::component::{
 use gpui_kit::{
     AppContext as _, Context, Div, Entity, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    div, px,
+    black, div, px,
 };
 use paircam_engine::LookId;
 use paircam_ui::tokens::{self, Palette, font};
@@ -28,6 +28,7 @@ use paircam_ui::{
     LinkState, Stat, StatusDot, StatusPill, color, material, palette, panel, section_label,
 };
 
+use crate::cinematic::{FocusMark, focus_box};
 use crate::colour::{look_swatches, look_tile};
 
 pub struct Gallery {
@@ -107,7 +108,8 @@ impl Gallery {
                 .child(Self::swatch("accent", palette.accent, cx))
                 .child(Self::swatch("live", palette.live, cx))
                 .child(Self::swatch("warning", palette.warning, cx))
-                .child(Self::swatch("danger", palette.danger, cx)),
+                .child(Self::swatch("danger", palette.danger, cx))
+                .child(Self::swatch("focus", palette.focus, cx)),
         )
     }
 
@@ -270,6 +272,38 @@ impl Gallery {
         )
     }
 
+    /// The boxes Cinematic mode draws over the picture, in each state, on black as the stage
+    /// is in both themes.
+    fn focus_boxes(cx: &Context<Self>) -> impl IntoElement {
+        let sample = |label: &'static str, mark: FocusMark| {
+            div()
+                .v_flex()
+                .items_center()
+                .gap_2()
+                .child(focus_box(mark).size(px(tokens::space::S_12)))
+                .child(
+                    div()
+                        .text_size(px(font::size::XS))
+                        .text_color(color(tokens::DARK.text_muted))
+                        .child(label),
+                )
+        };
+        Self::section("FOCUS BOXES", cx).child(
+            div()
+                .h_flex()
+                .gap_8()
+                .px_8()
+                .py_5()
+                .w_auto()
+                .self_start()
+                .rounded(px(tokens::radius::LG))
+                .bg(black())
+                .child(sample("Subject", FocusMark::Candidate))
+                .child(sample("In focus", FocusMark::Weak))
+                .child(sample("Held", FocusMark::Held)),
+        )
+    }
+
     fn feedback(cx: &Context<Self>) -> impl IntoElement {
         Self::section("FEEDBACK", cx)
             .child(
@@ -359,6 +393,7 @@ impl Render for Gallery {
                     .child(self.inputs(cx))
                     .child(Self::status(cx))
                     .child(Self::looks(cx))
+                    .child(Self::focus_boxes(cx))
                     .child(Self::feedback(cx)),
             )
     }
