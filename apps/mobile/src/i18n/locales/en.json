@@ -135,7 +135,7 @@
     "gestures": {
       "palm": {
         "title": "Open palm",
-        "body": "Hold an open hand up for a second to turn face tracking on or off."
+        "body": "In Cinematic mode, hold an open hand up for a second to move the focus to it. Do it again to give the focus back."
       },
       "frame": {
         "title": "L shape",

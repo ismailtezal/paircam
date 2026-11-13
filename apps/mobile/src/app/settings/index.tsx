@@ -15,14 +15,14 @@ import { mediumDate } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
 import { setFaceTracking, setGestures, usePreferences } from '@/lib/preferences';
 
-/** The gestures explained in Settings, in the order they are listed. */
-// Face tracking is switched off in the camera engine for now, and with it the open-palm
-// gesture that toggles it. Turn this on together with `faceTrackingAvailable` in Swift.
+// Face tracking is switched off in the camera engine for now. Turn this on together with
+// `faceTrackingAvailable` in Swift, and then explain that the open palm also toggles it
+// outside Cinematic mode.
 const FACE_TRACKING_AVAILABLE: boolean = false;
 
-const GESTURES = FACE_TRACKING_AVAILABLE
-  ? (['palm', 'frame', 'cross', 'spread'] as const)
-  : (['frame', 'cross', 'spread'] as const);
+/** The gestures explained in Settings, in the order they are listed. The open palm moves the
+ * focus in Cinematic mode. */
+const GESTURES = ['palm', 'frame', 'cross', 'spread'] as const;
 
 /** Explanations of the gestures may wrap; they are the whole manual. */
 const GESTURE_BODY_LINES = 3;

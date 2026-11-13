@@ -375,6 +375,10 @@ struct HandGestureRecognizer {
     private var cooldownUntil: TimeInterval = -Double.infinity
     private var spread: Spread?
 
+    /// The middle of the open palm when `palm` last fired, in the units hands are given in.
+    /// Cinematic mode pulls the focus to it.
+    private(set) var lastPalmCenter: HandPoint?
+
     var isSpreading: Bool {
         spread?.active ?? false
     }
@@ -386,6 +390,7 @@ struct HandGestureRecognizer {
         released = nil
         spread = nil
         cooldownUntil = -Double.infinity
+        lastPalmCenter = nil
         return wasSpreading ? [.spreadEnded] : []
     }
 
@@ -509,6 +514,9 @@ struct HandGestureRecognizer {
         cooldownUntil = time + GestureTuning.cooldown
         switch shape {
         case .openPalm:
+            lastPalmCenter = hands
+                .first { HandGeometry.shape(of: $0) == .openPalm }
+                .flatMap { HandGeometry.palmCenter($0) }
             return .palm
         case .frame:
             return .frame

@@ -65,6 +65,103 @@ enum CameraCatalog {
         return cameras.sorted { order(of: $0) < order(of: $1) }
     }
 
+    // MARK: - Cinematic mode
+
+    /// Cinematic mode films at this many frames a second at most.
+    static let cinematicMaxFps = 30
+
+    /// The pixel formats Cinematic mode can film in, best first: video range is what the
+    /// encoder takes; full range is converted by the output.
+    private static let cinematicPixelFormats: [FourCharCode] = [
+        kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+        kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+    ]
+
+    /// The camera that films in Cinematic mode on a side of the phone: the Dual Wide camera on
+    /// the back and the TrueDepth camera on the front, as Apple's Cinematic Video API allows.
+    /// `nil` before iOS 26, or when the phone has none that can.
+    static func cinematicCamera(for position: CameraPosition) -> CameraDescriptor? {
+        guard #available(iOS 26.0, *) else {
+            return nil
+        }
+        let deviceType: AVCaptureDevice.DeviceType
+        let devicePosition: AVCaptureDevice.Position
+        switch position {
+        case .back:
+            deviceType = .builtInDualWideCamera
+            devicePosition = .back
+        case .front:
+            deviceType = .builtInTrueDepthCamera
+            devicePosition = .front
+        case .external, .unknown:
+            return nil
+        }
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [deviceType],
+            mediaType: .video,
+            position: devicePosition
+        )
+        guard let device = session.devices.first(where: { $0.formats.contains(where: isCinematic) }) else {
+            return nil
+        }
+        return CameraDescriptor(
+            id: "\(position.rawValue)-cinematic",
+            device: device,
+            position: position,
+            lens: deviceType == .builtInDualWideCamera ? .other : .wide,
+            zoomScale: wideZoomFactor(of: device)
+        )
+    }
+
+    /// The Cinematic format nearest to the requested size: 1080p or 4K on current iPhones.
+    @available(iOS 26.0, *)
+    static func cinematicFormat(for device: AVCaptureDevice, width: Int, height: Int) -> AVCaptureDevice.Format? {
+        let usable = device.formats.filter(isCinematic)
+        let area = width * height
+        return usable.min { left, right in
+            let leftDistance = distance(of: left, fromArea: area)
+            let rightDistance = distance(of: right, fromArea: area)
+            if leftDistance != rightDistance {
+                return leftDistance < rightDistance
+            }
+            let leftRank = pixelFormatRank(left)
+            let rightRank = pixelFormatRank(right)
+            if leftRank != rightRank {
+                return leftRank < rightRank
+            }
+            if left.isVideoBinned != right.isVideoBinned {
+                return !left.isVideoBinned
+            }
+            return left.videoFieldOfView > right.videoFieldOfView
+        }
+    }
+
+    /// The whole frame rate nearest to the request that Cinematic mode allows with a format, at
+    /// most `cinematicMaxFps`.
+    @available(iOS 26.0, *)
+    static func cinematicFrameRate(of format: AVCaptureDevice.Format, closestTo requested: Int) -> Int {
+        let wanted = min(requested, cinematicMaxFps)
+        guard let range = format.videoFrameRateRangeForCinematicVideo else {
+            return min(supportedFrameRate(of: format, closestTo: wanted), cinematicMaxFps)
+        }
+        let lowest = max(1, Int(range.minFrameRate.rounded(.up)))
+        let highest = max(lowest, Int(range.maxFrameRate.rounded(.down)))
+        return min(max(wanted, lowest), highest)
+    }
+
+    @available(iOS 26.0, *)
+    private static func isCinematic(_ format: AVCaptureDevice.Format) -> Bool {
+        format.isCinematicVideoCaptureSupported
+            && cinematicPixelFormats.contains(CMFormatDescriptionGetMediaSubType(format.formatDescription))
+    }
+
+    private static func pixelFormatRank(_ format: AVCaptureDevice.Format) -> Int {
+        let subtype = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+        return cinematicPixelFormats.firstIndex(of: subtype) ?? cinematicPixelFormats.count
+    }
+
+    // MARK: - Formats
+
     /// The sizes a camera can capture, each with the highest frame rate it supports there.
     static func formats(for device: AVCaptureDevice) -> [VideoFormat] {
         var best = [String: VideoFormat]()

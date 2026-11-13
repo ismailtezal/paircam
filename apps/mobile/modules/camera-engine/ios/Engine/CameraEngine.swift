@@ -126,6 +126,11 @@ final class CameraEngine {
                 self?.handle(gesture: gesture)
             }
         }
+        capture.onCinematic = { [weak self] cinematic in
+            self?.queue.async {
+                self?.handle(cinematic: cinematic)
+            }
+        }
 
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let reachable = path.status == .satisfied
@@ -497,6 +502,9 @@ final class CameraEngine {
             if let gestures = values.gestures {
                 EngineLog.shared.info("vision", "\(hostName) turned gestures \(gestures ? "on" : "off")")
             }
+            if let cinematic = values.cinematic {
+                EngineLog.shared.info("capture", "\(hostName) turned Cinematic mode \(cinematic ? "on" : "off")")
+            }
             capture.applyControl(values) { [weak self, weak session] controls in
                 self?.queue.async {
                     session?.send(.controlState(controls))
@@ -583,6 +591,13 @@ final class CameraEngine {
             EngineLog.shared.info("vision", inView ? "face found" : "face lost")
         }
         session.send(.subject(subject))
+    }
+
+    private func handle(cinematic: CinematicState) {
+        guard let session = active, session.isEstablished else {
+            return
+        }
+        session.send(.cinematic(cinematic))
     }
 
     private func handle(gesture: GestureEvent) {
@@ -749,8 +764,9 @@ extension CameraEngine: HostSessionDelegate {
             isStreaming = false
             capture.stopEncoding()
         }
-        // Face tracking and gestures belong to a session; the next one starts from the settings.
-        capture.applyControl(ControlValues(faceTracking: false, gestures: false)) { _ in }
+        // Face tracking, gestures and Cinematic mode belong to a session; the next one starts
+        // from the settings.
+        capture.applyControl(ControlValues(faceTracking: false, gestures: false, cinematic: false)) { _ in }
         subjectInView = false
         updateEnvironment {
             $0.faceTracking = false

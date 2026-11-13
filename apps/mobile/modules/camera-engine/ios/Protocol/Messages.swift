@@ -695,9 +695,17 @@ extension CinematicFocus: Codable {
                 self = .unknown
             }
         case "track":
-            self = point.map { .track(point: $0, strong: strong) } ?? .unknown
+            if let point {
+                self = .track(point: point, strong: strong)
+            } else {
+                self = .unknown
+            }
         case "fixed":
-            self = point.map { .fixed(point: $0) } ?? .unknown
+            if let point {
+                self = .fixed(point: point)
+            } else {
+                self = .unknown
+            }
         default:
             self = .unknown
         }

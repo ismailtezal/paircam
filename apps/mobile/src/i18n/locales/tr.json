@@ -135,7 +135,7 @@
     "gestures": {
       "palm": {
         "title": "Açık avuç",
-        "body": "Yüz takibini açmak ya da kapatmak için açık elinizi bir saniye havada tutun."
+        "body": "Sinematik modda odağı elinize almak için açık elinizi bir saniye havada tutun. Odağı geri vermek için tekrarlayın."
       },
       "frame": {
         "title": "L işareti",

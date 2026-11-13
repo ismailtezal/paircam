@@ -168,6 +168,21 @@ final class OneOffGestureTests: XCTestCase {
         XCTAssertEqual(oneOffs(rest), [.palm])
     }
 
+    func testPalmRemembersWhereTheHandWas() {
+        var recognizer = HandGestureRecognizer()
+        XCTAssertNil(recognizer.lastPalmCenter)
+        let events = simulate(&recognizer, frames: 20) { _ in [openPalm] }
+        XCTAssertEqual(oneOffs(events), [.palm])
+        // The wrist is at (0.6, 0.3), and the wrist and knuckles average 0.76 palm lengths
+        // straight above it.
+        let center = try? XCTUnwrap(recognizer.lastPalmCenter)
+        XCTAssertEqual(center?.x ?? 0, 0.6, accuracy: 1e-9)
+        XCTAssertEqual(center?.y ?? 0, 0.3 + 0.76 * 0.15, accuracy: 1e-9)
+
+        _ = recognizer.reset()
+        XCTAssertNil(recognizer.lastPalmCenter)
+    }
+
     func testFrameFiresAfterBeingHeld() {
         var recognizer = HandGestureRecognizer()
         let events = simulate(&recognizer, frames: 20) { _ in [lFrame] }

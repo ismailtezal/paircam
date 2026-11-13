@@ -6,6 +6,10 @@ import UIKit
 /// The session runs whenever the app is in the foreground so the preview is always live. Frames
 /// reach the encoder only while a computer is streaming. Session and device changes happen on a
 /// private session queue; frames are delivered and encoded on a private video queue.
+///
+/// In Cinematic mode (iOS 26) the phone films from the camera on the chosen side that can, with
+/// Apple's Cinematic Video capture on: the frames arrive with the lens blur already in them, a
+/// metadata output reports what the camera could focus on, and the desktop moves the focus.
 final class CaptureController: NSObject {
     /// What the desktop asked for, or the defaults until it asks.
     struct Request: Equatable {
@@ -60,6 +64,10 @@ final class CaptureController: NSObject {
     private static let spreadZoomRampRate: Float = 6
     /// How often a running zoom ramp is checked to see whether it has settled.
     private static let zoomSettleCheckInterval: TimeInterval = 0.1
+    /// What Cinematic mode sees is reported at most this often, unless the focus moves.
+    private static let cinematicReportInterval: TimeInterval = 0.1
+    /// Without metadata for this long, nothing is in view any more.
+    private static let cinematicQuietInterval: TimeInterval = 0.5
 
     let session = AVCaptureSession()
 
@@ -74,6 +82,9 @@ final class CaptureController: NSObject {
     var onSubject: ((SubjectUpdate) -> Void)?
     /// A hand gesture the camera recognised and acted on. Any thread.
     var onGesture: ((GestureEvent) -> Void)?
+    /// What Cinematic mode sees and where it focuses, while it is on, and an empty state once
+    /// when it goes off. Any thread.
+    var onCinematic: ((CinematicState) -> Void)?
 
     private let sessionQueue = DispatchQueue(label: "app.paircam.capture.session")
     private let videoQueue = DispatchQueue(label: "app.paircam.capture.video", qos: .userInteractive)
@@ -81,6 +92,8 @@ final class CaptureController: NSObject {
     private let rotation = CaptureRotation()
     private let encoder: VideoEncoder
     private let analyzer = VisionAnalyzer()
+    private let metadataOutput = AVCaptureMetadataOutput()
+    private let metadataQueue = DispatchQueue(label: "app.paircam.capture.metadata")
 
     // Session queue state.
     private var isConfigured = false
@@ -99,6 +112,33 @@ final class CaptureController: NSObject {
     private var zoomGeneration = 0
     /// The zoom, as the user sees it, when the current spread gesture began.
     private var spreadStartZoom: Double?
+    /// The camera the desktop chose. In Cinematic mode `activeCamera` is the camera on the
+    /// same side that films it.
+    private var logicalCamera: CameraDescriptor?
+    /// The Cinematic camera on each side, found once.
+    private var cinematicCameras: [CameraPosition: CameraDescriptor] = [:]
+    /// What the phone can do in Cinematic mode, or `nil` when it cannot.
+    private var cinematicSupport: CinematicCapabilities?
+    /// The desktop asked for Cinematic mode.
+    private var cinematicRequested = false
+    /// The camera is filming in Cinematic mode.
+    private var cinematicActive = false
+    /// The simulated aperture as an f-number: the user's choice, or the format's default.
+    private var aperture: Double?
+    /// An open palm pulled the focus to the hand; the next one hands it back.
+    private var palmFocusHeld = false
+    private var sceneObservation: NSKeyValueObservation?
+
+    // Metadata queue state.
+    private var cinematicSubjects: [CinematicSubject] = []
+    private var lowLight = false
+    private var lastCinematicReport: (time: TimeInterval, state: CinematicState)?
+    /// Bumped by every metadata delivery, so a quiet check knows whether one came since.
+    private var metadataGeneration = 0
+
+    /// The subjects as last seen, for focus commands on the session queue.
+    private let subjectsLock = NSLock()
+    private var seenSubjects: [CinematicSubject] = []
 
     // Video queue state.
     private var isEncoding = false
@@ -129,9 +169,9 @@ final class CaptureController: NSObject {
         analyzer.onFace = { [weak self] face in
             self?.onSubject?(SubjectUpdate(face: face))
         }
-        analyzer.onGesture = { [weak self] event in
+        analyzer.onGesture = { [weak self] event, point in
             self?.sessionQueue.async {
-                self?.handle(gesture: event)
+                self?.handle(gesture: event, at: point)
             }
         }
 
@@ -202,7 +242,7 @@ final class CaptureController: NSObject {
     /// Applies what the desktop asked for and reports what the camera is really doing.
     func apply(_ newRequest: Request, completion: @escaping (ActiveFormat) -> Void) {
         sessionQueue.async {
-            let previousCamera = self.activeCamera?.id
+            let previousCamera = self.logicalCamera?.id
             let previous = self.request
             self.request = newRequest
             let wasConfigured = self.isConfigured
@@ -213,10 +253,7 @@ final class CaptureController: NSObject {
                 || previous.height != newRequest.height
                 || previous.fps != newRequest.fps
             if self.isConfigured, wasConfigured, captureChanged {
-                self.session.beginConfiguration()
-                self.selectCamera()
-                self.session.commitConfiguration()
-                self.configureConnection()
+                self.reconfigureCamera()
             }
             let settings = self.encoderSettings()
             self.videoQueue.async {
@@ -291,6 +328,14 @@ final class CaptureController: NSObject {
     /// again once it has.
     func applyControl(_ values: ControlValues, completion: @escaping (ControlValues) -> Void) {
         sessionQueue.async {
+            // Cinematic mode can switch cameras, so it goes first and the rest applies to the
+            // camera it leaves running.
+            if let on = values.cinematic {
+                self.setCinematic(on)
+            }
+            if let aperture = values.aperture {
+                self.setAperture(aperture)
+            }
             if let device = self.activeCamera?.device {
                 do {
                     try device.lockForConfiguration()
@@ -325,6 +370,18 @@ final class CaptureController: NSObject {
             EngineLog.shared.error("capture", "no camera was found")
             return
         }
+        for position in [CameraPosition.back, .front] {
+            if let camera = CameraCatalog.cinematicCamera(for: position) {
+                cinematicCameras[position] = camera
+            }
+        }
+        cinematicSupport = cinematicCapabilities()
+        if let support = cinematicSupport {
+            EngineLog.shared.info(
+                "capture",
+                "Cinematic mode available on: \(support.positions.map { $0.rawValue }.joined(separator: ", "))"
+            )
+        }
 
         session.beginConfiguration()
         session.automaticallyConfiguresCaptureDeviceForWideColor = false
@@ -345,13 +402,23 @@ final class CaptureController: NSObject {
         EngineLog.shared.info("capture", "found cameras: \(cameras.map { $0.id }.joined(separator: ", "))")
     }
 
-    /// Switches to the requested camera, format and frame rate. Call inside a configuration block.
+    /// Switches to the requested camera, format and frame rate, and in Cinematic mode to the camera
+    /// on the same side that films it. Call inside a configuration block.
     private func selectCamera() {
         let requested = cameras.first(where: { $0.id == request.camera })
         let fallback = cameras.first(where: { $0.id == CameraCatalog.defaultCameraId })
-        guard let camera = requested ?? activeCamera ?? fallback ?? cameras.first else {
+        guard let chosen = requested ?? logicalCamera ?? fallback ?? cameras.first else {
             return
         }
+        logicalCamera = chosen
+        // Settled below once the camera, format and Cinematic capture are in place; until then
+        // nothing is filming in Cinematic mode.
+        cinematicActive = false
+        let cinematicCamera = cinematicRequested ? cinematicCameras[chosen.position] : nil
+        if cinematicRequested, cinematicCamera == nil {
+            EngineLog.shared.warning("capture", "no \(chosen.position.rawValue) camera can film in Cinematic mode")
+        }
+        let camera = cinematicCamera ?? chosen
 
         // A multi-lens camera starts on the wide lens (1×) and keeps its zoom across format
         // changes, rather than falling back to the ultra wide at the device's own 1.
@@ -387,34 +454,86 @@ final class CaptureController: NSObject {
         }
 
         let device = camera.device
-        guard
-            let format = CameraCatalog.bestFormat(
+        var candidate: AVCaptureDevice.Format?
+        var fps = request.fps
+        if cinematicCamera != nil, #available(iOS 26.0, *) {
+            candidate = CameraCatalog.cinematicFormat(for: device, width: request.width, height: request.height)
+            if let candidate {
+                fps = CameraCatalog.cinematicFrameRate(of: candidate, closestTo: request.fps)
+            }
+        } else {
+            candidate = CameraCatalog.bestFormat(
                 for: device,
                 width: request.width,
                 height: request.height,
                 fps: request.fps
             )
-        else {
+            if let candidate {
+                fps = CameraCatalog.supportedFrameRate(of: candidate, closestTo: request.fps)
+            }
+        }
+        guard let format = candidate else {
             EngineLog.shared.warning("capture", "camera \(camera.id) has no usable format")
             return
         }
+        // Zoom limits depend on it, so it is set before the zoom; `setCinematicCapture` settles it.
+        cinematicActive = cinematicCamera != nil
         do {
             try device.lockForConfiguration()
             device.activeFormat = format
-            let fps = CameraCatalog.supportedFrameRate(of: format, closestTo: request.fps)
             let frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
             device.activeVideoMinFrameDuration = frameDuration
             device.activeVideoMaxFrameDuration = frameDuration
-            if camera.zoomScale != 1 {
+            if camera.zoomScale != 1 || cinematicActive {
                 device.videoZoomFactor = zoomFactor(forDisplay: displayZoom, camera: camera)
             }
-            if focusMode == .auto, device.isFocusModeSupported(.continuousAutoFocus) {
+            // Cinematic mode decides the focus itself.
+            if !cinematicActive, focusMode == .auto, device.isFocusModeSupported(.continuousAutoFocus) {
                 device.focusMode = .continuousAutoFocus
             }
-            device.isSubjectAreaChangeMonitoringEnabled = true
+            device.isSubjectAreaChangeMonitoringEnabled = !cinematicActive
             device.unlockForConfiguration()
         } catch {
             EngineLog.shared.warning("capture", "could not set the format on \(camera.id): \(error)")
+        }
+        setCinematicCapture(cinematicCamera != nil)
+    }
+
+    /// Turns Cinematic capture on the current input on or off. Afterwards `cinematicActive`
+    /// says whether it really is on. Call inside a configuration block, after the format is set.
+    private func setCinematicCapture(_ on: Bool) {
+        guard #available(iOS 26.0, *), let input else {
+            cinematicActive = false
+            return
+        }
+        if on, input.isCinematicVideoCaptureSupported {
+            input.isCinematicVideoCaptureEnabled = true
+            applyAperture(to: input)
+            cinematicActive = true
+            return
+        }
+        if input.isCinematicVideoCaptureEnabled {
+            input.isCinematicVideoCaptureEnabled = false
+        }
+        if on {
+            EngineLog.shared.warning("capture", "the camera cannot film this format in Cinematic mode")
+        }
+        cinematicActive = false
+    }
+
+    /// Re-selects the camera with the outputs in a safe order: the metadata output leaves before
+    /// Cinematic capture can turn off, and joins once it is on, with the object types Cinematic
+    /// capture requires (any other set raises an exception).
+    private func reconfigureCamera() {
+        detachMetadataOutput()
+        session.beginConfiguration()
+        selectCamera()
+        session.commitConfiguration()
+        configureConnection()
+        if cinematicActive {
+            attachMetadataOutput()
+        } else {
+            clearCinematic()
         }
     }
 
@@ -484,7 +603,7 @@ final class CaptureController: NSObject {
 
     private func activeFormat() -> ActiveFormat {
         var active = ActiveFormat(
-            camera: activeCamera?.id ?? request.camera,
+            camera: logicalCamera?.id ?? activeCamera?.id ?? request.camera,
             width: request.width,
             height: request.height,
             fps: request.fps,
@@ -548,10 +667,14 @@ final class CaptureController: NSObject {
             controls.stabilization = modes
         }
         controls.faceTracking = CaptureController.faceTrackingAvailable
-        controls.gestures =
-            CaptureController.faceTrackingAvailable
-            ? [.palm, .frame, .cross, .spread]
-            : [.frame, .cross, .spread]
+        // The open palm toggles face tracking, or pulls the focus in Cinematic mode.
+        var gestures: [GestureKind] = []
+        if CaptureController.faceTrackingAvailable || cinematicSupport != nil {
+            gestures.append(.palm)
+        }
+        gestures.append(contentsOf: [.frame, .cross, .spread])
+        controls.gestures = gestures
+        controls.cinematic = cinematicSupport
         return controls
     }
 
@@ -574,6 +697,10 @@ final class CaptureController: NSObject {
             state.torch = device.torchMode == .on
         }
         state.stabilization = stabilization
+        if cinematicSupport != nil {
+            state.cinematic = cinematicActive
+            state.aperture = aperture.map { ($0 * 10).rounded() / 10 }
+        }
         return state
     }
 
@@ -583,7 +710,13 @@ final class CaptureController: NSObject {
             rampZoom(to: zoom, camera: camera, rate: CaptureController.zoomRampRate)
         }
 
-        if let focus = values.focus {
+        if let target = values.cinematicFocus {
+            palmFocusHeld = false
+            applyCinematicFocus(target, device: device)
+        }
+
+        // Cinematic mode decides the focus itself; the lens controls wait until it is off.
+        if !cinematicActive, let focus = values.focus {
             switch focus {
             case .auto:
                 if device.isFocusModeSupported(.continuousAutoFocus) {
@@ -604,13 +737,19 @@ final class CaptureController: NSObject {
             case .unknown:
                 break
             }
-        } else if let position = values.focusPosition, device.isLockingFocusWithCustomLensPositionSupported {
+        } else if !cinematicActive, let position = values.focusPosition,
+            device.isLockingFocusWithCustomLensPositionSupported
+        {
             device.setFocusModeLocked(lensPosition: min(max(Float(position), 0), 1), completionHandler: nil)
             focusMode = .manual
         }
 
         if let point = values.focusPoint {
-            focus(on: point, device: device)
+            if cinematicActive {
+                applyCinematicFocus(.track(point: point, strong: false), device: device)
+            } else {
+                focus(on: point, device: device)
+            }
         }
 
         if let bias = values.exposureBias {
@@ -644,27 +783,234 @@ final class CaptureController: NSObject {
 
     /// Focuses and exposes once on a point of the picture the desktop shows, as a tap does.
     private func focus(on point: PicturePoint, device: AVCaptureDevice) {
-        let x = min(max(point.x, 0), 1)
-        let y = min(max(point.y, 0), 1)
-        // The desktop's picture is rotated and mirrored by the connection; the camera wants the
-        // point in the sensor's own coordinates. The output knows how to convert.
-        let size = 0.02
-        let outputRect = CGRect(x: x - size / 2, y: y - size / 2, width: size, height: size)
-        let sensorRect = videoOutput.metadataOutputRectConverted(fromOutputRect: outputRect)
-        let sensorPoint = CGPoint(
-            x: min(max(sensorRect.midX, 0), 1),
-            y: min(max(sensorRect.midY, 0), 1)
-        )
+        let target = self.sensorPoint(for: point)
 
         if device.isFocusPointOfInterestSupported, device.isFocusModeSupported(.autoFocus) {
-            device.focusPointOfInterest = sensorPoint
+            device.focusPointOfInterest = target
             device.focusMode = .autoFocus
             focusMode = .auto
         }
         if device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.continuousAutoExposure) {
-            device.exposurePointOfInterest = sensorPoint
+            device.exposurePointOfInterest = target
             device.exposureMode = .continuousAutoExposure
         }
+    }
+
+    /// A point of the picture the desktop shows, in the sensor's own coordinates, which focus,
+    /// exposure and Cinematic mode take. The desktop's picture is rotated and mirrored by the
+    /// connection; the output knows how to convert.
+    private func sensorPoint(for point: PicturePoint) -> CGPoint {
+        let x = min(max(point.x, 0), 1)
+        let y = min(max(point.y, 0), 1)
+        let size = 0.02
+        let outputRect = CGRect(x: x - size / 2, y: y - size / 2, width: size, height: size)
+        let sensorRect = videoOutput.metadataOutputRectConverted(fromOutputRect: outputRect)
+        return CGPoint(
+            x: min(max(sensorRect.midX, 0), 1),
+            y: min(max(sensorRect.midY, 0), 1)
+        )
+    }
+
+    // MARK: - Cinematic mode
+
+    private func cinematicCapabilities() -> CinematicCapabilities? {
+        guard #available(iOS 26.0, *) else {
+            return nil
+        }
+        let positions = [CameraPosition.back, .front].filter { cinematicCameras[$0] != nil }
+        guard let first = positions.first, let camera = cinematicCameras[first] else {
+            return nil
+        }
+        var support = CinematicCapabilities(positions: positions)
+        // Every Cinematic format offers the same aperture range in practice; take the one the
+        // phone films in by default.
+        if let format = CameraCatalog.cinematicFormat(for: camera.device, width: 1920, height: 1080),
+            format.maxSimulatedAperture >= format.minSimulatedAperture,
+            format.minSimulatedAperture > 0
+        {
+            support.aperture = ValueRange(
+                min: Double(format.minSimulatedAperture),
+                max: Double(format.maxSimulatedAperture)
+            )
+        }
+        return support
+    }
+
+    private func setCinematic(_ on: Bool) {
+        palmFocusHeld = false
+        guard on != cinematicRequested || on != cinematicActive else {
+            return
+        }
+        cinematicRequested = on
+        guard isConfigured else {
+            return
+        }
+        EngineLog.shared.info("capture", "Cinematic mode \(on ? "on" : "off")")
+        reconfigureCamera()
+        if on, !cinematicActive {
+            // It could not start: report it off rather than keep trying on every change.
+            cinematicRequested = false
+        }
+        let settings = encoderSettings()
+        videoQueue.async {
+            self.encoder.configure(settings)
+            // Another camera, and perhaps another frame rate: a fresh videoConfig and keyframe.
+            self.encoder.invalidate()
+        }
+    }
+
+    private func setAperture(_ value: Double) {
+        guard value.isFinite, value > 0 else {
+            return
+        }
+        aperture = value
+        if cinematicActive, #available(iOS 26.0, *), let input {
+            applyAperture(to: input)
+        }
+    }
+
+    /// Sets the input's simulated aperture to the user's choice within what the format allows,
+    /// or to the format's default.
+    @available(iOS 26.0, *)
+    private func applyAperture(to input: AVCaptureDeviceInput) {
+        let format = input.device.activeFormat
+        let lowest = Double(format.minSimulatedAperture)
+        let highest = Double(format.maxSimulatedAperture)
+        guard lowest > 0, highest >= lowest else {
+            return
+        }
+        let wanted = aperture ?? Double(format.defaultSimulatedAperture)
+        let value = min(max(wanted, lowest), highest)
+        input.simulatedAperture = Float(value)
+        aperture = value
+    }
+
+    /// Moves the focus in Cinematic mode, as a tap or a long press on the Camera app's screen
+    /// does. The device must be locked for configuration.
+    private func applyCinematicFocus(_ target: CinematicFocus, device: AVCaptureDevice) {
+        guard cinematicActive, #available(iOS 26.0, *) else {
+            return
+        }
+        switch target {
+        case .auto:
+            // A weak focus on the main subject hands the choice back to the camera.
+            if let subject = mainSubject() {
+                device.setCinematicVideoTrackingFocus(detectedObjectID: subject.id, focusMode: .weak)
+            } else {
+                device.setCinematicVideoTrackingFocus(
+                    at: sensorPoint(for: PicturePoint(x: 0.5, y: 0.5)),
+                    focusMode: .weak
+                )
+            }
+        case .subject(let id, let strong):
+            device.setCinematicVideoTrackingFocus(detectedObjectID: id, focusMode: strong ? .strong : .weak)
+        case .track(let point, let strong):
+            device.setCinematicVideoTrackingFocus(at: sensorPoint(for: point), focusMode: strong ? .strong : .weak)
+        case .fixed(let point):
+            device.setCinematicVideoFixedFocus(at: sensorPoint(for: point), focusMode: .strong)
+        case .unknown:
+            break
+        }
+    }
+
+    /// The person the camera would pick by itself: the largest face, else the largest head or
+    /// body.
+    private func mainSubject() -> CinematicSubject? {
+        subjectsLock.lock()
+        let subjects = seenSubjects
+        subjectsLock.unlock()
+        let area = { (subject: CinematicSubject) in subject.rect.width * subject.rect.height }
+        for kinds in [[SubjectKind.face], [.head, .body]] {
+            if let largest = subjects.filter({ kinds.contains($0.kind) }).max(by: { area($0) < area($1) }) {
+                return largest
+            }
+        }
+        return nil
+    }
+
+    private func detachMetadataOutput() {
+        sceneObservation?.invalidate()
+        sceneObservation = nil
+        if session.outputs.contains(metadataOutput) {
+            session.removeOutput(metadataOutput)
+        }
+    }
+
+    /// Adds the metadata output once the session runs with Cinematic capture on, as Apple's
+    /// sample does, and watches whether there is enough light.
+    private func attachMetadataOutput() {
+        guard #available(iOS 26.0, *), cinematicActive, let device = activeCamera?.device else {
+            return
+        }
+        if !session.outputs.contains(metadataOutput) {
+            guard session.canAddOutput(metadataOutput) else {
+                EngineLog.shared.warning("capture", "the session refused the metadata output; no focus boxes")
+                return
+            }
+            session.addOutput(metadataOutput)
+        }
+        metadataOutput.setMetadataObjectsDelegate(self, queue: metadataQueue)
+        metadataOutput.metadataObjectTypes = metadataOutput.requiredMetadataObjectTypesForCinematicVideoCapture
+        sceneObservation = device.observe(
+            \.cinematicVideoCaptureSceneMonitoringStatuses,
+            options: [.initial, .new]
+        ) { [weak self] device, _ in
+            let dark = device.cinematicVideoCaptureSceneMonitoringStatuses.contains(.notEnoughLight)
+            self?.metadataQueue.async {
+                self?.setLowLight(dark)
+            }
+        }
+    }
+
+    /// Cinematic mode is off: forget what it saw, and tell the desktop once if it was told
+    /// anything.
+    private func clearCinematic() {
+        subjectsLock.lock()
+        seenSubjects = []
+        subjectsLock.unlock()
+        metadataQueue.async {
+            self.metadataGeneration += 1
+            self.cinematicSubjects = []
+            self.lowLight = false
+            if self.lastCinematicReport != nil {
+                self.lastCinematicReport = nil
+                self.onCinematic?(CinematicState())
+            }
+        }
+    }
+
+    // Metadata queue.
+
+    private func setLowLight(_ dark: Bool) {
+        guard dark != lowLight else {
+            return
+        }
+        lowLight = dark
+        EngineLog.shared.info("capture", dark ? "not enough light for Cinematic mode" : "enough light again")
+        publishCinematic()
+    }
+
+    /// Sends what Cinematic mode sees when it changed: at once when the focus or the light
+    /// changes, and otherwise at most every `cinematicReportInterval` while subjects move.
+    private func publishCinematic() {
+        let state = CinematicState(subjects: cinematicSubjects, lowLight: lowLight)
+        let now = ProcessInfo.processInfo.systemUptime
+        if let last = lastCinematicReport {
+            if last.state == state {
+                return
+            }
+            let focused = { (state: CinematicState) in
+                state.subjects.filter { $0.focus != .unfocused }.map { "\($0.id)\($0.focus.rawValue)" }
+            }
+            let sameShape = focused(last.state) == focused(state)
+                && last.state.lowLight == state.lowLight
+                && last.state.subjects.map(\.id) == state.subjects.map(\.id)
+            if sameShape, now - last.time < CaptureController.cinematicReportInterval {
+                return
+            }
+        }
+        lastCinematicReport = (time: now, state: state)
+        onCinematic?(state)
     }
 
     // MARK: - Zoom
@@ -672,9 +1018,22 @@ final class CaptureController: NSObject {
     /// The device zoom factors the camera may use.
     private func zoomLimits(of camera: CameraDescriptor) -> ClosedRange<CGFloat> {
         let device = camera.device
-        let lower = device.minAvailableVideoZoomFactor
-        let upper = min(device.maxAvailableVideoZoomFactor, CaptureController.maxZoom * camera.zoomScale)
-        return lower...max(lower, upper)
+        let available = device.minAvailableVideoZoomFactor...device.maxAvailableVideoZoomFactor
+        var lower = available.lowerBound
+        var upper = min(available.upperBound, CaptureController.maxZoom * camera.zoomScale)
+        if cinematicActive, camera.id == activeCamera?.id, #available(iOS 26.0, *) {
+            let format = device.activeFormat
+            if format.videoMaxZoomFactorForCinematicVideo >= format.videoMinZoomFactorForCinematicVideo,
+                format.videoMinZoomFactorForCinematicVideo > 0
+            {
+                lower = max(lower, format.videoMinZoomFactorForCinematicVideo)
+                upper = min(upper, format.videoMaxZoomFactorForCinematicVideo)
+            }
+        }
+        // Never outside what the device accepts, whatever the format says.
+        lower = min(max(lower, available.lowerBound), available.upperBound)
+        upper = min(max(upper, lower), available.upperBound)
+        return lower...upper
     }
 
     /// Converts a zoom as the user sees it (1× is the wide lens) to a device factor in range.
@@ -740,8 +1099,9 @@ final class CaptureController: NSObject {
         }
     }
 
-    /// Acts on a gesture, then tells the desktop what happened.
-    private func handle(gesture event: HandGestureRecognizer.Event) {
+    /// Acts on a gesture, then tells the desktop what happened. `point` is where the open palm
+    /// was, for `palm`.
+    private func handle(gesture event: HandGestureRecognizer.Event, at point: PicturePoint?) {
         // Turning gestures off ends a spread in progress; anything else that arrives afterwards
         // comes from an analysis that was already running.
         guard gestures || event == .spreadEnded else {
@@ -749,6 +1109,24 @@ final class CaptureController: NSObject {
         }
         switch event {
         case .palm:
+            if cinematicActive, let point, let device = activeCamera?.device {
+                do {
+                    try device.lockForConfiguration()
+                    if palmFocusHeld {
+                        applyCinematicFocus(.auto, device: device)
+                    } else {
+                        applyCinematicFocus(.track(point: point, strong: true), device: device)
+                    }
+                    device.unlockForConfiguration()
+                    palmFocusHeld.toggle()
+                } catch {
+                    EngineLog.shared.warning("capture", "could not lock the camera to move the focus: \(error)")
+                    return
+                }
+                EngineLog.shared.info("vision", "gesture palm: focus \(palmFocusHeld ? "on the hand" : "back to automatic")")
+                onGesture?(GestureEvent(kind: .palm, phase: .recognised))
+                return
+            }
             guard CaptureController.faceTrackingAvailable else {
                 return
             }
@@ -852,6 +1230,7 @@ final class CaptureController: NSObject {
     @objc private func subjectAreaDidChange(_ notification: Notification) {
         sessionQueue.async {
             guard
+                !self.cinematicActive,
                 let device = self.activeCamera?.device,
                 (notification.object as? AVCaptureDevice) === device,
                 self.focusMode == .auto,
@@ -870,6 +1249,120 @@ final class CaptureController: NSObject {
             } catch {
                 EngineLog.shared.debug("capture", "could not return to continuous focus: \(error)")
             }
+        }
+    }
+}
+
+extension CaptureController: AVCaptureMetadataOutputObjectsDelegate {
+    /// What Cinematic mode sees, on the metadata queue.
+    func metadataOutput(
+        _ output: AVCaptureMetadataOutput,
+        didOutput metadataObjects: [AVMetadataObject],
+        from connection: AVCaptureConnection
+    ) {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+        let subjects = metadataObjects.compactMap { cinematicSubject(of: $0) }
+        subjectsLock.lock()
+        seenSubjects = subjects
+        subjectsLock.unlock()
+        cinematicSubjects = subjects
+        publishCinematic()
+
+        // The output may fall silent when nothing is in view; then nothing is.
+        metadataGeneration += 1
+        let generation = metadataGeneration
+        metadataQueue.asyncAfter(deadline: .now() + CaptureController.cinematicQuietInterval) { [weak self] in
+            guard let self, self.metadataGeneration == generation, !self.cinematicSubjects.isEmpty else {
+                return
+            }
+            self.subjectsLock.lock()
+            self.seenSubjects = []
+            self.subjectsLock.unlock()
+            self.cinematicSubjects = []
+            self.publishCinematic()
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private func cinematicSubject(of object: AVMetadataObject) -> CinematicSubject? {
+        let type = object.type.rawValue.lowercased()
+        // Opaque metadata for editing recordings, not something in the picture.
+        guard !type.contains("cinematic") else {
+            return nil
+        }
+        let kind = CaptureController.subjectKind(type: type, fixed: object.isFixedFocus)
+        let bounds = videoOutput.outputRectConverted(fromMetadataOutputRect: object.bounds)
+        var x = min(max(Double(bounds.minX), 0), 1)
+        var y = min(max(Double(bounds.minY), 0), 1)
+        var width = min(max(Double(bounds.width), 0), 1 - x)
+        var height = min(max(Double(bounds.height), 0), 1 - y)
+        if width <= 0 || height <= 0 {
+            guard kind == .fixed else {
+                return nil
+            }
+            // A fixed focus may be a bare point: give it a small square to show.
+            let size = 0.06
+            x = min(max(x - size / 2, 0), 1 - size)
+            y = min(max(y - size / 2, 0), 1 - size)
+            width = size
+            height = size
+        }
+        let round = { (value: Double) in (value * 10_000).rounded() / 10_000 }
+        return CinematicSubject(
+            id: object.objectID,
+            kind: kind,
+            rect: PictureRect(x: round(x), y: round(y), width: round(width), height: round(height)),
+            focus: CaptureController.subjectFocus(object.cinematicVideoFocusMode)
+        )
+    }
+
+    private static func subjectKind(type: String, fixed: Bool) -> SubjectKind {
+        if fixed {
+            return .fixed
+        }
+        if type.contains("face") {
+            return .face
+        }
+        if type.contains("hand") {
+            return .hand
+        }
+        if type.contains("cat") || type.contains("dog") || type.contains("animal") {
+            return .animal
+        }
+        if type.contains("head") {
+            return .head
+        }
+        if type.contains("body") {
+            return .body
+        }
+        return .object
+    }
+
+    // The SDK has given this property both as the enum and as a raw Int32; one of these two fits.
+    @available(iOS 26.0, *)
+    private static func subjectFocus(_ mode: AVCaptureDevice.CinematicVideoFocusMode) -> SubjectFocus {
+        switch mode {
+        case .strong:
+            return .strong
+        case .weak:
+            return .weak
+        default:
+            return .unfocused
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private static func subjectFocus(_ raw: Int32) -> SubjectFocus {
+        // CinematicVideoFocusMode: none = 0, strong = 1, weak = 2.
+        switch raw {
+        case 1:
+            return .strong
+        case 2:
+            return .weak
+        default:
+            return .unfocused
         }
     }
 }

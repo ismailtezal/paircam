@@ -21,8 +21,9 @@ final class VisionAnalyzer {
 
     /// The largest face, or `nil` once when the face is lost. Called on the analysis queue.
     var onFace: ((PictureRect?) -> Void)?
-    /// A gesture fired, began, changed or ended. Called on the analysis queue.
-    var onGesture: ((HandGestureRecognizer.Event) -> Void)?
+    /// A gesture fired, began, changed or ended, with where the open palm was for `palm`.
+    /// Called on the analysis queue.
+    var onGesture: ((HandGestureRecognizer.Event, PicturePoint?) -> Void)?
 
     private static let maximumHandCount = 2
 
@@ -57,7 +58,7 @@ final class VisionAnalyzer {
             }
             if !newOptions.gestures {
                 for event in self.recognizer.reset() {
-                    self.onGesture?(event)
+                    self.onGesture?(event, nil)
                 }
             }
         }
@@ -123,7 +124,15 @@ final class VisionAnalyzer {
             let aspect = height > 0 ? width / height : 1
             let hands = (handRequest.results ?? []).compactMap { VisionAnalyzer.pose(of: $0, aspect: aspect) }
             for event in recognizer.update(hands: hands, time: time) {
-                onGesture?(event)
+                var point: PicturePoint?
+                if event == .palm, let center = recognizer.lastPalmCenter, aspect > 0 {
+                    // Back from the recognizer's units (picture heights, y up) to the picture.
+                    point = PicturePoint(
+                        x: VisionAnalyzer.rounded(min(max(center.x / aspect, 0), 1)),
+                        y: VisionAnalyzer.rounded(min(max(1 - center.y, 0), 1))
+                    )
+                }
+                onGesture?(event, point)
             }
         }
     }
